@@ -6,6 +6,19 @@ __pycache__/
 # C extensions
 *.so
 
+# Basedpyright/pyright
+pyproject.toml
+pyright.json
+
+# Miscellaneous
+wandb/
+data/
+lightning_logs/
+strokeformer/
+.idea
+.vscode
+.zed
+
 # Distribution / packaging
 .Python
 build/

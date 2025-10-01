@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0+cu128
+torchvision==0.23.0+cu128
+lightning==2.5.5
+numpy==2.3.3
+pandas==2.3.3
+matplotlib==3.10.6
+nibabel==5.3.2
+monai==1.5.1
+wandb==0.22.1
+tqdm==4.67.1
+einops==0.8.1
