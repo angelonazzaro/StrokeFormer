@@ -19,6 +19,10 @@ strokeformer/
 .vscode
 .zed
 
+# CarveMix
+*.csv
+carvemix-masks
+
 # Distribution / packaging
 .Python
 build/

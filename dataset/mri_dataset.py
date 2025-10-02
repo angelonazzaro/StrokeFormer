@@ -1,17 +1,15 @@
 import os
-
 from glob import glob
 from typing import Callable, List, Union, Optional, Tuple
 
 import einops
-import torch
 import numpy as np
-
+import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import v2
 
-from utils import extract_patches, round_half_up, check_patch_dim
 from constants import SCAN_DIM
+from utils import extract_patches, round_half_up, check_patch_dim
 
 
 class MRIDataset(Dataset):
@@ -19,12 +17,12 @@ class MRIDataset(Dataset):
                  scans: Union[List[str], str],
                  masks: Optional[Union[List[str], str]] = None,
                  ext: str = ".npy",
-                 scan_dim: Tuple[int, int, int] = SCAN_DIM,
+                 scan_dim: Tuple[int, int, int, int,] = SCAN_DIM,
                  patch_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]] = None,
                  stride: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
-                ):
+                 ):
         super().__init__()
 
         """
@@ -43,8 +41,8 @@ class MRIDataset(Dataset):
             ext (str, default=".npy"):
                 File extension for scans and masks (only used if `scans` or `masks` are directories).
 
-            scan_dim (Tuple[int, int, int], default=(189, 192, 192)):
-                Expected shape of each MRI scan in (Depth, Height, Width).
+            scan_dim (Tuple[int, int, int, int], default=(1, 189, 192, 192)):
+                Expected shape of each MRI scan in (Channels, Depth, Height, Width).
 
             patch_dim (Optional[Tuple[Optional[int], Optional[int], Optional[int]]], default=None):
                 Shape of extracted patches in (Depth, Height, Width).
@@ -62,7 +60,7 @@ class MRIDataset(Dataset):
             augment (bool, default=False):
                 If True, applies data augmentation strategies during training.
         """
-        
+
         if stride < 0.0 or stride > 1.0:
             raise ValueError(f"`stride` must be within the range [0, 1]: {stride}")
 
@@ -74,7 +72,7 @@ class MRIDataset(Dataset):
                 raise ValueError(f"`scans` must be a valid directory path: {scans}")
 
             self.scans = sorted(glob(os.path.join(scans, "*" + ext)))
-        
+
         if masks is not None:
             if isinstance(masks, str):
                 if not os.path.exists(masks) or not os.path.isdir(masks):
@@ -85,7 +83,7 @@ class MRIDataset(Dataset):
             assert len(self.masks) == len(self.scans), "MRIDataset: scans and masks must have the same length"
         else:
             self.masks = None
-        
+
         self.scan_dim = scan_dim
         self.patch_dim = patch_dim
         self.stride = stride
@@ -93,7 +91,7 @@ class MRIDataset(Dataset):
         self.patch_num = None
 
         if self.patch_dim is not None:
-            D, H, W = scan_dim
+            _, D, H, W = scan_dim
             patch_D, patch_H, patch_W = check_patch_dim(patch_dim, scan_dim)
 
             # check for 'padded' patches that may be added during patch extraction
@@ -111,7 +109,7 @@ class MRIDataset(Dataset):
             patch_W = round_half_up(patch_W * stride) if stride is not None else patch_W
 
             self.patch_num = round_half_up((D * H * W) / (patch_D * patch_H * patch_W)) + padded_patches
-         
+
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
         else:
@@ -120,12 +118,10 @@ class MRIDataset(Dataset):
         self.augment = augment
 
     def __len__(self):
-        if self.patch_num is not None:
-            return self.patch_num * len(self.scans)
         return len(self.scans)
 
-    def __getitem__(self, index) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[List[torch.Tensor], torch.Tensor]]:
-        scan = np.load(self.scans[index]) # expected shape: (D, H, W)
+    def __getitem__(self, index) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[List[torch.Tensor], torch.Tensor, torch.Tensor]]:
+        scan = np.load(self.scans[index])  # expected shape: (C, H, W, D)
         mask = np.zeros_like(scan)
 
         if self.masks is not None:
@@ -137,8 +133,8 @@ class MRIDataset(Dataset):
         mask = einops.rearrange(mask, "c h w d -> c d h w")
 
         if scan.shape != self.scan_dim or mask.shape != self.scan_dim:
-            raise ValueError(f"`scan`,`mask` have an unusual shape: {scan.shape}, {mask.shape}. Expected {self.scan_dim}.")
-
+            raise ValueError(
+                f"`scan`,`mask` have an unusual shape: {scan.shape}, {mask.shape}. Expected {self.scan_dim}.")
 
         if self.augment and self.transforms is not None:
             scan, mask = self.transforms(scan, mask)
@@ -146,7 +142,8 @@ class MRIDataset(Dataset):
         scan = (scan - scan.mean()) / scan.std()
 
         if self.patch_dim is not None:
-            patches = extract_patches(scan=scan, stride=self.stride, patch_dim=self.patch_dim)
-            return patches, mask
+            patches, origins = extract_patches(scan=scan, stride=self.stride, patch_dim=self.patch_dim,
+                                               return_origins=True)
+            return torch.stack(patches, dim=0), torch.tensor(origins), mask
 
         return scan, mask
