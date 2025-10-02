@@ -4,7 +4,7 @@ from typing import Optional, Tuple, List, Union
 
 import numpy as np
 import torch
-import torchmetrics
+from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
 from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
 
 
@@ -12,50 +12,43 @@ def build_metrics(num_classes: int):
     task = "binary" if num_classes <= 2 else "multiclass"
     return {
         "accuracy": partial(
-            torchmetrics.functional.accuracy,
+            accuracy,
             task=task,
             num_classes=num_classes,
             average='macro',
             ignore_index=None
         ),
-        "precision": partial(
-            AveragePrecisionMetric,
-        ),
+        # "precision": AveragePrecisionMetric(),
         "recall": partial(
-            torchmetrics.functional.recall,
+            recall,
             task=task,
             num_classes=num_classes,
             ignore_index=None,
             average='macro'
         ),
         "f1": partial(
-            torchmetrics.functional.f1_score,
+            f1_score,
             task=task,
             num_classes=num_classes,
             average='macro',
             ignore_index=None
         ),
         "f2": partial(
-            torchmetrics.functional.fbeta_score,
+            fbeta_score,
             beta=2.0,
             task=task,
             num_classes=num_classes,
             average='macro',
             ignore_index=None
         ),
-        "iou": partial(
-            MeanIoU,
-        ),
+        # "iou": MeanIoU(),
         "mcc": partial(
-            torchmetrics.functional.matthews_corrcoef,
+            matthews_corrcoef,
             task=task,
             num_classes=num_classes,
             ignore_index=None  # semantic_loss_ignore_index
         ),
-        "dice": partial(
-            DiceMetric,
-            num_classes=num_classes,
-        ),
+        # "dice": DiceMetric(num_classes=num_classes),
     }
 
 

@@ -12,7 +12,7 @@ from utils import reconstruct_volume, build_metrics
 class StrokeFormer(LightningModule):
     def __init__(self,
                  checkpoint_path: Optional[str] = None,
-                 num_classes: int = 2,
+                 num_classes: int = 1,
                  in_channels: int = 1,
                  lr: float = 1e-6,
                  betas: tuple[float, float] = (0.9, 0.999),
@@ -46,10 +46,10 @@ class StrokeFormer(LightningModule):
     def forward(self, x: torch.Tensor, return_logits: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # (B, P, C, D, H, W) -> (B*P, C, D, H, W)
         x = x.view(-1, *x.shape[2:])
-        logits = self.model(x) # shape (P, N, D, H, W)
+        logits = self.model(x) # shape (B*P, N, D, H, W)
 
         if self.num_classes > 2:
-            preds = logits.softmax()
+            preds = logits.softmax(dim=1)
         else:
             preds = logits.sigmoid()
 
@@ -61,21 +61,27 @@ class StrokeFormer(LightningModule):
     def _common_step(self, batch, prefix: Literal['train', 'val', 'test']):
         patches, origins, masks = batch
 
-        preds, logits = self.forward(patches, return_logits=True)
+        preds = self.forward(patches)
+        # (B*P, N, D, H, W) -> (B, P, N, D, H, W)
+        preds = preds.view(patches.shape[0], patches.shape[1], *preds.shape[1:])
 
         # reconstruct volumes from patches
-        scans = []
-        for scan_patches, scan_origins in zip(patches, origins):
+        pred_scans = []
+        for scan_patches, scan_origins in zip(preds, origins):
             scan = reconstruct_volume(patches=scan_patches, scan_dim=masks[0].shape, origins=scan_origins)
-            scans.append(scan)
+            pred_scans.append(scan)
 
-        scans = torch.stack(scans, dim=0)
+        pred_scans = torch.stack(pred_scans, dim=0)
 
-        log_dict = {}
+        loss = self.loss(pred_scans, masks)
+
+        log_dict = {f'{prefix}_loss': loss,}
         for metric in self.metrics:
-            log_dict[f"{prefix}_{metric}"] = self.metrics[metric](preds, masks)  # noqa
+            log_dict[f"{prefix}_{metric}"] = self.metrics[metric](pred_scans, masks)  # noqa
 
         self.log_dict(dictionary=log_dict, on_step=True, prog_bar=True, on_epoch=True)
+
+        return loss
 
     def training_step(self, batch):
         return self._common_step(batch, prefix='train')

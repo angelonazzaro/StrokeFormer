@@ -5,7 +5,7 @@ trainer:
   strategy: auto
   devices: auto
   num_nodes: 1
-  precision: null
+  precision: 16-mixed
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
@@ -107,7 +107,7 @@ trainer:
   model_registry: null
 model:
   checkpoint_path: null
-  num_classes: 2
+  num_classes: 1
   in_channels: 1
   lr: 1.0e-06
   betas:
@@ -138,7 +138,7 @@ data:
   stride: 0.5
   transforms: null
   augment: false
-  batch_size: 2
+  batch_size: 1
   num_workers: 0
 optimizer: null
 lr_scheduler: null

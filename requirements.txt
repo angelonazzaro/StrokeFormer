@@ -4,7 +4,7 @@ torch==2.8.0+cpu
 torchvision==0.23.0+cpu
 torchmetrics==1.8.2
 lightning==2.5.5
-jsonargparse==4.41.0
+jsonargparse[signatures]==4.41.0
 numpy==2.3.3
 pandas==2.3.3
 matplotlib==3.10.6
