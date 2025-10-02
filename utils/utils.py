@@ -4,8 +4,20 @@ from typing import Optional, Tuple, List, Union
 
 import numpy as np
 import torch
+import wandb
 from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
-from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
+
+from constants import CLASS_LABELS
+
+
+# from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
+
+
+def wb_mask(bg_img, mask, prediction_mask, class_labels=CLASS_LABELS):
+    return wandb.Image(bg_img, masks={
+        "predictions": {"mask_data": prediction_mask, "class_labels": class_labels},
+        "ground truth": {"mask_data": mask, "class_labels": class_labels}
+    })
 
 
 def build_metrics(num_classes: int):
@@ -127,10 +139,20 @@ def extract_patches(scan: Union[torch.Tensor, np.ndarray],
 
 
 def reconstruct_volume(
-        patches: List[Union[torch.Tensor, np.ndarray]],
+        patches: Union[torch.Tensor, List[np.ndarray]],
         scan_dim: Tuple[Optional[int], int, int, int],
         origins: List[Tuple[int, int, int]],
         to_tensor: bool = True) -> Union[np.ndarray, torch.Tensor]:
+
+    if isinstance(patches, torch.Tensor) and patches.ndim == 6:
+        # multi-scan case (list of lists)
+        volumes = [
+            reconstruct_volume(p, scan_dim, o, to_tensor=to_tensor)
+            for p, o in zip(patches, origins)
+        ]
+
+        return torch.stack(volumes, dim=0) if isinstance(volumes[0], torch.Tensor) else np.stack(volumes, axis=0)
+
     D, H, W = scan_dim[-3], scan_dim[-2], scan_dim[-1]
 
     patch_D, patch_H, patch_W = patches[0].shape[-3], patches[0].shape[-2], patches[0].shape[-1]

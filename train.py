@@ -16,7 +16,7 @@ class MyCLI(LightningCLI):
             logger.watch(
                 model=model,
                 log="all",  # gradients + parameter histograms + model topology
-                log_freq=6,
+                log_freq=100,
                 log_graph=False,  # in case model graph is large or breaks wandb
             )
             logger.experiment.config.update(dict(self.config))
