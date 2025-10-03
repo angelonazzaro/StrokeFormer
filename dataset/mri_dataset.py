@@ -19,6 +19,7 @@ class MRIDataset(IterableDataset):
                  ext: str = ".npy",
                  scan_dim: Tuple[int, int, int, int,] = SCAN_DIM,
                  slices_per_scan: int = SCAN_DIM[-3],
+                 stride: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  ):
@@ -45,6 +46,10 @@ class MRIDataset(IterableDataset):
             
             slices_per_scan (Tuple[int, int, int, int], default=(1, 189, 192, 192)):
                 Depth/N. of slices to consider for each volume (Channels, Depth, Height, Width).
+
+            stride (float, default=0.5):
+                Stride size (fraction of patch size) when sliding the window over scans
+                to extract patches. If None, no stride is applied.
             
             resize_to: (dict, default= None):
                 A dictionary containing 'height' and 'width' keys that correspond 
@@ -58,6 +63,12 @@ class MRIDataset(IterableDataset):
             augment (bool, default=False):
                 If True, applies data augmentation strategies during training.
         """
+
+        if stride < 0.0 or stride > 1.0:
+            raise ValueError(f"`stride` must be within the range [0, 1]: {stride}")
+
+        if scan_dim[-3] < slices_per_scan:
+            raise ValueError(f"MRIDataset: `slices_per_scan` must be smaller than `depth` axis in scan_dim: {slices_per_scan} - {scan_dim[-3]}")
 
         self.scans = scans
 
@@ -81,9 +92,14 @@ class MRIDataset(IterableDataset):
 
         self.scan_dim = scan_dim
         self.slices_per_scan = slices_per_scan
+        self.stride = stride
 
-        if scan_dim[-3] < self.slices_per_scan:
-            raise ValueError(f"MRIDataset: `slices_per_scan` must be smaller than `depth` axis in scan_dim: {self.slices_per_scan} - {scan_dim[-3]}")
+        D = scan_dim[-3]
+        self.subvolumes_num = round_half_up(D / slices_per_scan)
+
+        if self.stride is not None:
+            patch_D = round_half_up(self.slices_per_scan * stride) if stride is not None else self.slices_per_scan
+            self.subvolumes_num = round_half_up(D / patch_D)
 
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
@@ -93,7 +109,7 @@ class MRIDataset(IterableDataset):
         self.augment = augment
 
     def __len__(self):
-        return len(self.scans) * round_half_up(self.scan_dim[-3] / self.slices_per_scan)
+        return len(self.scans) * self.subvolumes_num
 
     def _load_data(self, index):
         scan = np.load(self.scans[index])  # expected shape: (C, H, W, D)
@@ -125,11 +141,11 @@ class MRIDataset(IterableDataset):
 
         for index in indexes:
             scan, mask = self._load_data(index)
+            stride_D = round_half_up(self.slices_per_scan * self.stride) if self.stride is not None else self.slices_per_scan
 
-            # TODO: right now, 3D continuity is broken. Implement slicing window or overlap patching approach
-            for i in range(0, depth, self.slices_per_scan):
-                scan_chunk = scan[:, i: i + self.slices_per_scan]
-                mask_chunk = mask[:, i: i + self.slices_per_scan]
+            for z in range(0, depth, stride_D):
+                scan_chunk = scan[:, z: z + self.slices_per_scan]
+                mask_chunk = mask[:, z: z + self.slices_per_scan]
 
                 if scan_chunk.shape[-3] != self.slices_per_scan:
                     padding = (0, 0, 0, 0, 0, self.slices_per_scan - scan_chunk.shape[-3], 0, 0)

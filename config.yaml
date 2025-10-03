@@ -151,10 +151,11 @@ data:
   - 189
   - 192
   - 192
-  slices_per_scan: 128
-  resize_to:
-    height: 128
-    width: 128
+  stride: 0.5
+  subvolume_dim:
+  - 128
+  - 128
+  - 128
   transforms: null
   augment: false
   batch_size: 1
