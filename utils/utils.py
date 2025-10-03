@@ -64,6 +64,20 @@ def build_metrics(num_classes: int):
     }
 
 
+def overlay_img(scan: np.ndarray, mask: np.ndarray, color: tuple[int, int, int] = (255, 0, 0), alpha: float = 0.5):
+    assert (scan.ndim == 3 and mask.ndim == 3
+            and mask.shape[-1] == 3 and scan.shape[-1] == 3), "image and overlay must be RGB images"
+
+    scan = scan.copy()
+    mask = mask.astype(bool).copy()
+
+    overlay = np.zeros_like(scan)
+    overlay[:, :] = color
+
+    scan[mask] = (1 - alpha) * scan[mask] + alpha * overlay[mask]
+    return scan.astype(np.uint8)
+
+
 def round_half_up(x):
     return math.floor(x + 0.5)
 
@@ -143,7 +157,6 @@ def reconstruct_volume(
         scan_dim: Tuple[Optional[int], int, int, int],
         origins: List[Tuple[int, int, int]],
         to_tensor: bool = True) -> Union[np.ndarray, torch.Tensor]:
-
     if isinstance(patches, torch.Tensor) and patches.ndim == 6:
         # multi-scan case (list of lists)
         volumes = [

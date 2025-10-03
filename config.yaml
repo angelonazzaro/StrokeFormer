@@ -42,6 +42,11 @@ trainer:
       monitor_gym: null
       settings: null
   callbacks:
+  - class_path: callbacks.LogPredictionCallback
+    init_args:
+      num_images: 1
+      log_every_n_val_epochs: 1
+      slices_per_scan: 20
   - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     init_args:
       logging_interval: epoch

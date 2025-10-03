@@ -6,7 +6,7 @@ from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 from model.segformer3d import SegFormer3D
-from utils import reconstruct_volume, build_metrics
+from utils import build_metrics
 
 
 class StrokeFormer(LightningModule):
