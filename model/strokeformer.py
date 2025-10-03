@@ -92,9 +92,8 @@ class StrokeFormer(LightningModule):
 
     def forward(self, x: torch.Tensor, return_preds: bool = False) -> Union[
         torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # (B, P, C, D, H, W) -> (B*P, C, D, H, W)
-        x = x.view(-1, *x.shape[2:])
-        logits = self.model(x)  # shape (B*P, N, D, H, W)
+
+        logits = self.model(x)
 
         if return_preds:
             if self.num_classes > 2:
@@ -102,24 +101,17 @@ class StrokeFormer(LightningModule):
             else:
                 preds = logits.sigmoid()
             return preds
+
         return logits
 
     def _common_step(self, batch, prefix: Literal['train', 'val', 'test']):
-        scan_patches, origins, masks = batch
+        scans, masks = batch
 
-        logits = self.forward(scan_patches)
-        # (B*P, N, D, H, W) -> (B, P, N, D, H, W)
-        logits = logits.view(scan_patches.shape[0], scan_patches.shape[1], *logits.shape[1:])
+        logits = self.forward(scans)
 
-        # reconstruct volumes from patches
-        # currently, they only hold the reconstructed logits
-        predicted_masks = reconstruct_volume(logits, masks[0].shape, origins)
-
-        # TODO: check if gradients propagate through reconstructed volumes,
-        #  otherwise compute loss per patch and aggregate after
         loss_values = []
         for loss in self.losses:
-            loss_val = loss(predicted_masks, masks)
+            loss_val = loss(logits, masks)
             loss_values.append(loss_val)
 
             if len(self.losses) > 1:
@@ -133,9 +125,9 @@ class StrokeFormer(LightningModule):
         log_dict = {f"{prefix}_loss": loss}
 
         if self.num_classes > 2:
-            predicted_masks = predicted_masks.softmax(dim=1)
+            predicted_masks = logits.softmax(dim=1)
         else:
-            predicted_masks = predicted_masks.sigmoid()
+            predicted_masks = logits.sigmoid()
 
         for metric in self.metrics:
             log_dict[f"{prefix}_{metric}"] = self.metrics[metric](predicted_masks, masks)  # noqa

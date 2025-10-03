@@ -1,5 +1,8 @@
 from typing import Callable, List, Optional, Tuple
 
+import torch
+import torch.nn.functional as f
+
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
@@ -52,8 +55,8 @@ class MRIDataModule(LightningDataModule):
                  paths: dict,
                  ext: str = ".npy",
                  scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
-                 patch_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]] = None,
-                 stride: Optional[float] = 0.5,
+                 slices_per_scan: int = SCAN_DIM[-3],
+                 resize_to: Optional[dict] = None,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  batch_size: int = 32,
@@ -67,8 +70,8 @@ class MRIDataModule(LightningDataModule):
         self.ext = ext
 
         self.scan_dim = scan_dim
-        self.patch_dim = patch_dim
-        self.stride = stride
+        self.slices_per_scan = slices_per_scan
+        self.resize_to = resize_to
 
         self.transforms = transforms
         self.augment = augment
@@ -91,8 +94,7 @@ class MRIDataModule(LightningDataModule):
                                                      masks=self.paths[split]["masks"],
                                                      ext=self.ext,
                                                      scan_dim=self.scan_dim,
-                                                     patch_dim=self.patch_dim,
-                                                     stride=self.stride,
+                                                     slices_per_scan=self.slices_per_scan,
                                                      transforms=self.transforms,
                                                      augment=augment))
 
@@ -101,8 +103,8 @@ class MRIDataModule(LightningDataModule):
             self.train_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=False,
-            # collate_fn=self.custom_collate,
+            shuffle=False, # does not work with iterable dataset
+            collate_fn=self.custom_collate,
         )
 
     def val_dataloader(self):
@@ -111,7 +113,7 @@ class MRIDataModule(LightningDataModule):
             num_workers=self.num_workers,
             batch_size=self.batch_size,
             shuffle=False,
-            # collate_fn=self.custom_collate,
+            collate_fn=self.custom_collate,
         )
 
     def test_dataloader(self):
@@ -120,8 +122,34 @@ class MRIDataModule(LightningDataModule):
             num_workers=self.num_workers,
             batch_size=self.batch_size,
             shuffle=False,
-            # collate_fn=self.custom_collate,
+            collate_fn=self.custom_collate,
         )
 
     def custom_collate(self, batch):
-        pass
+        scans, masks = zip(*batch)
+        scans, masks = torch.stack(scans), torch.stack(masks)
+
+        if self.resize_to is not None:
+            # with align_corners = False and antialias = True this is equivalent to PIL downsample method
+            # shape must be (B, D*C, H, W)
+            # anti-alias is restricted to 4-D tensors
+            B, C, D, H, W = scans.shape
+            scans = scans.view(B, C * D, H, W)
+            masks = masks.view(B, C * D, H, W)
+
+            scans = f.interpolate(scans,
+                                    size=(self.resize_to["height"], self.resize_to["width"]),
+                                    mode="bilinear",
+                                    align_corners=False,
+                                    antialias=True)
+            masks = f.interpolate(masks,
+                                   size=(self.resize_to["height"], self.resize_to["width"]),
+                                   align_corners=False,
+                                   mode="bilinear",
+                                   antialias=True).long().to(dtype=scans.dtype)
+
+            # restore original shape of (B, C, D, resize_h, resize_w)
+            scans = scans.view(B, C, D, self.resize_to["height"], self.resize_to["width"])
+            masks = masks.view(B, C, D, self.resize_to["height"], self.resize_to["width"])
+
+        return scans, masks
