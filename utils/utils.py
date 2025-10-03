@@ -1,4 +1,5 @@
 import math
+import random
 from functools import partial
 from typing import Optional, Tuple, List, Union
 
@@ -6,11 +7,80 @@ import numpy as np
 import torch
 import wandb
 from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
+from torchvision.transforms.v2.functional import to_pil_image
 
 from constants import CLASS_LABELS
 
 
 # from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
+
+
+@torch.no_grad()
+def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: dict[partial]):
+    preds = model(scans, return_preds=True)
+    preds = (preds >= 0.5).float()
+
+    # randomly sample slices_per_scan
+    if slices_per_scan < scans.shape[-3]:
+        random_slices = random.choices(np.arange(masks.shape[-3]), k=slices_per_scan)
+        masks = masks[:, :, random_slices]
+        scans = scans[:, :, random_slices]
+        preds = preds[:, :, random_slices]
+    else:
+        masks = masks
+        scans = scans
+
+    for scan, predicted_mask, mask in zip(scans, preds, masks):
+        for slice_idx in range(scan.shape[-3]):
+            scan_slice = scan[0, slice_idx, ...]
+            mask_slice = mask[0, slice_idx, ...]
+            predicted_slice = predicted_mask[0, slice_idx, ...]
+
+            scores = {metric: metrics[metric](predicted_slice, mask_slice).cpu().item() for metric in metrics}
+
+            # normalize scan as RGB conversion requires [0,1] range
+            scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
+
+            scan_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
+            mask_slice = np.asarray(to_pil_image(mask_slice).convert("RGB"))
+            predicted_slice = np.asarray(to_pil_image(predicted_slice).convert("RGB"))
+
+            lesion_size = get_lesion_size_category(mask_slice)
+
+            gt = overlay_img(scan_slice, mask_slice, color=(0, 255, 0))
+            pd = overlay_img(scan_slice, predicted_slice, color=(255, 0, 0))
+
+            # yield results for this slice
+            yield {
+                "scan_slice": scan_slice,
+                "mask_slice": mask_slice,
+                "slice_idx": slice_idx,
+                "lesion_size": lesion_size,
+                "predicted_slice": predicted_slice,
+                "gt": gt,
+                "pd": pd,
+                "scores": scores,
+            }
+
+
+def get_lesion_size_category(mask, return_all: bool = False):
+    slice_area = mask.size
+    voxels = np.sum(mask)
+    lesion_size = voxels / slice_area
+
+    if voxels == 0:
+        size_category = "No Lesion"
+    elif lesion_size <= 0.01:
+        size_category = "Small"
+    elif lesion_size <= 0.05:
+        size_category = "Medium"
+    else:
+        size_category = "Large"
+
+    if return_all:
+        return size_category, voxels, lesion_size
+
+    return size_category
 
 
 def wb_mask(bg_img, mask, prediction_mask, class_labels=CLASS_LABELS):

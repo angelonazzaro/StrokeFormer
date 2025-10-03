@@ -2,7 +2,6 @@ from typing import Callable, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as f
-
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
@@ -104,7 +103,7 @@ class MRIDataModule(LightningDataModule):
             self.train_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=False, # does not work with iterable dataset
+            shuffle=False,  # does not work with iterable dataset
             collate_fn=self.custom_collate,
         )
 
@@ -139,15 +138,15 @@ class MRIDataModule(LightningDataModule):
             masks = masks.view(B, C * D, H, W)
 
             scans = f.interpolate(scans,
-                                    size=(self.subvolume_dim[1], self.subvolume_dim[2]),
-                                    mode="bilinear",
-                                    align_corners=False,
-                                    antialias=True)
+                                  size=(self.subvolume_dim[1], self.subvolume_dim[2]),
+                                  mode="bilinear",
+                                  align_corners=False,
+                                  antialias=True)
             masks = f.interpolate(masks,
-                                   size=(self.subvolume_dim[2], self.subvolume_dim[2]),
-                                   align_corners=False,
-                                   mode="bilinear",
-                                   antialias=True).long().to(dtype=scans.dtype)
+                                  size=(self.subvolume_dim[2], self.subvolume_dim[2]),
+                                  align_corners=False,
+                                  mode="bilinear",
+                                  antialias=True).long().to(dtype=scans.dtype)
 
             # restore original shape of (B, C, D, resize_h, resize_w)
             scans = scans.view(B, C, D, self.subvolume_dim[1], self.subvolume_dim[2])
