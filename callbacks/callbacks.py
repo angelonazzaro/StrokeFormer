@@ -76,24 +76,3 @@ class LogPredictionCallback(Callback):
         # TODO: tables is not uploaded to wandb
         # trainer.logger.experiment.log({f"val_epoch_{trainer.current_epoch}": table})
         # wandb.log({f"val_epoch_{trainer.current_epoch}": table})
-
-
-class LogLRCallback(Callback):
-    def __init__(self, log_interval: Literal["epoch", "step"] = "epoch"):
-        super().__init__()
-        self.log_interval = log_interval
-
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if self.log_interval == "step":
-            self._log_lrs(trainer, pl_module, on_step=True, on_epoch=False)
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        if self.log_interval == "epoch":
-            self._log_lrs(trainer, pl_module, on_step=False, on_epoch=True)
-
-    def _log_lrs(self, trainer, pl_module, on_step: bool, on_epoch: bool):
-        pass
-        # optimizer = trainer.optimizers[0]  # assumes 1 optimizer
-        # for i, param_group in enumerate(optimizer.param_groups):
-        #     lr = param_group["lr"]
-        #     trainer.logger.experiment.log(f"Learning Rate", lr, on_step=on_step, on_epoch=on_epoch)

@@ -140,6 +140,7 @@ class MRIDataset(Dataset):
             scan, mask = self.transforms(scan, mask)
 
         scan = (scan - scan.mean()) / scan.std()
+        mask = mask.long().to(dtype=scan.dtype)
 
         if self.patch_dim is not None:
             patches, origins = extract_patches(scan=scan, stride=self.stride, patch_dim=self.patch_dim,

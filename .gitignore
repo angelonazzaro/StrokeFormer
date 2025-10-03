@@ -15,6 +15,7 @@ wandb/
 data/
 lightning_logs/
 strokeformer/
+StrokeFormer/
 .idea
 .vscode
 .zed

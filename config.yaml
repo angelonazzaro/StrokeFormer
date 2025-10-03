@@ -9,14 +9,14 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: strokeformer3D-baseline
+      name: StrokeFormer3D-baseline
       save_dir: .
       version: null
-      offline: true
+      offline: false
       dir: null
       id: null
       anonymous: null
-      project: strokeformer
+      project: StrokeFormer
       log_model: false
       experiment: null
       prefix: ''
@@ -42,6 +42,21 @@ trainer:
       monitor_gym: null
       settings: null
   callbacks:
+  - class_path: callbacks.LogPredictionCallback
+    init_args:
+      num_images: 1
+      log_every_n_val_epochs: 10
+      slices_per_scan: 20
+      scan_dim:
+      - 1
+      - 189
+      - 192
+      - 192
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: epoch
+      log_momentum: false
+      log_weight_decay: false
   - class_path: lightning.pytorch.callbacks.EarlyStopping
     init_args:
       monitor: val_loss
@@ -58,7 +73,7 @@ trainer:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
       dirpath: null
-      filename: strokeformer3D-baseline-{epoch:02d}-{val_loss:.2f}
+      filename: StrokeFormer3D-baseline-{epoch:02d}-{val_loss:.2f}
       monitor: val_loss
       verbose: true
       save_last: null
@@ -106,16 +121,26 @@ trainer:
   default_root_dir: strokeformer
   model_registry: null
 model:
-  checkpoint_path: null
+  losses:
+  - DiceLoss
+  - BCEWithLogitsLoss
+  losses_weights:
+  - 0.5
+  - 0.5
+  losses_configs:
+  - sigmoid: true
+    squared_pred: true
+  - {}
   num_classes: 1
   in_channels: 1
-  lr: 1.0e-06
   betas:
   - 0.9
   - 0.999
   eps: 1.0e-08
-  warmup_steps: 10000
-  warmup_init_lr: 4.0e-06
+  lr: 0.0004
+  init_lr: 4.0e-06
+  warmup_steps: 10
+  lr_scheduler_interval: epoch
   weight_decay: 0.001
 data:
   paths:
@@ -135,7 +160,7 @@ data:
   - 64
   - 64
   - 64
-  stride: 0.5
+  stride: 1.0
   transforms: null
   augment: false
   batch_size: 1
