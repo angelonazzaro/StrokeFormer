@@ -7,6 +7,7 @@ from torchvision.transforms.v2.functional import to_pil_image
 from torchvision.utils import make_grid
 from tqdm import tqdm
 
+from constants import LESION_SIZES
 from dataset import MRIDataModule
 from model import StrokeFormer
 from utils import predictions_generator
@@ -21,7 +22,7 @@ def test(args):
         model_name = args.ckpt_path.split(os.path.sep)[-1].split("-")[:2]
 
     datamodule = MRIDataModule(paths={"test": {"scans": args.scans, "masks": args.masks}},
-                               subvolume_dim=args.subvolume_dim, stride=args.stride,
+                               subvolume_dim=args.subvolume_dim, overlap=args.stride,
                                batch_size=args.batch_size, num_workers=args.num_workers)
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
@@ -34,7 +35,7 @@ def test(args):
 
     per_size_scores = {}
 
-    for size in ["No Lesion", "Small", "Medium", "Large"]:
+    for size in LESION_SIZES:
         per_size_scores[size] = defaultdict(list)
 
     with torch.no_grad():
