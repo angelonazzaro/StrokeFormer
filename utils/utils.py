@@ -1,5 +1,6 @@
 import math
 import random
+from copy import deepcopy
 from functools import partial
 from typing import Optional, Tuple, List, Union
 
@@ -8,8 +9,6 @@ import torch
 import wandb
 from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
 from torchvision.transforms.v2.functional import to_pil_image
-
-from constants import CLASS_LABELS
 
 
 # from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
@@ -65,29 +64,22 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
 
 def get_lesion_size_category(mask, return_all: bool = False):
     slice_area = mask.size
-    voxels = np.sum(mask)
-    lesion_size = voxels / slice_area
+    lesion_voxels = np.sum(mask)
+    lesion_area = lesion_voxels / slice_area
 
-    if voxels == 0:
+    if lesion_voxels == 0:
         size_category = "No Lesion"
-    elif lesion_size <= 0.01:
+    elif lesion_area <= 0.01:
         size_category = "Small"
-    elif lesion_size <= 0.05:
+    elif lesion_area <= 0.05:
         size_category = "Medium"
     else:
         size_category = "Large"
 
     if return_all:
-        return size_category, voxels, lesion_size
+        return size_category, lesion_voxels, lesion_area
 
     return size_category
-
-
-def wb_mask(bg_img, mask, prediction_mask, class_labels=CLASS_LABELS):
-    return wandb.Image(bg_img, masks={
-        "predictions": {"mask_data": prediction_mask, "class_labels": class_labels},
-        "ground truth": {"mask_data": mask, "class_labels": class_labels}
-    })
 
 
 def build_metrics(num_classes: int):
@@ -165,16 +157,22 @@ def check_patch_dim(patch_dim: Optional[Tuple[Optional[int], Optional[int], Opti
 
 
 def extract_patches(scan: Union[torch.Tensor, np.ndarray],
-                    stride: Optional[float] = None,
+                    overlap: Optional[Union[float, Tuple[Optional[float], Optional[float], Optional[float]]]] = None,
                     patch_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]] = None,
                     return_origins: bool = False):
     patches = []
     origins = []
     patch_D, patch_H, patch_W = check_patch_dim(patch_dim, scan.shape)
 
-    stride_D = round_half_up(patch_D * stride) if stride is not None else patch_D
-    stride_H = round_half_up(patch_H * stride) if stride is not None else patch_H
-    stride_W = round_half_up(patch_W * stride) if stride is not None else patch_W
+    if isinstance(overlap, float):
+        overlap = (overlap, overlap, overlap)
+    else:
+        tmp = [ov if ov is not None else 1.0 for ov in overlap]
+        overlap = tuple(tmp)
+
+    stride_D = round_half_up(patch_D * overlap[-3]) if overlap is not None else patch_D
+    stride_H = round_half_up(patch_H * overlap[-2]) if overlap is not None else patch_H
+    stride_W = round_half_up(patch_W * overlap[-1]) if overlap is not None else patch_W
 
     H_dim = scan.shape[-2]
     W_dim = scan.shape[-1]
