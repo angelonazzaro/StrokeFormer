@@ -1,17 +1,97 @@
 import math
 import random
-from copy import deepcopy
 from functools import partial
 from typing import Optional, Tuple, List, Union
 
+import matplotlib.pyplot as plt
+import nibabel as nib
 import numpy as np
 import torch
-import wandb
+from scipy.ndimage import label
 from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
 from torchvision.transforms.v2.functional import to_pil_image
+from tqdm import tqdm
+
+from constants import LESION_SIZES
 
 
 # from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
+
+
+def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[str] = LESION_SIZES,
+                                     return_masks: bool = False):
+    metadata = {
+        "patients_count": 0,
+        "lesions_per_patient": [],
+        "tot_voxels": 0,
+        "lesion_voxels": 0,
+        "tot_slices": 0,
+        "slices_without_lesions": 0,
+        "slices_with_lesions": 0,
+    }
+
+    for size in labels:
+        metadata[size] = {
+            "lesion_area": [],
+            "count": 0,
+            "filepaths": []
+        }
+
+    masks = [nib.load(filepath).get_fdata() if filepath.endswith(".nii.gz") else np.load(filepath) for filepath in
+             tqdm(masks_filepaths, desc="Loading masks")]
+
+    for i, mask in tqdm(enumerate(masks), desc="Getting lesion distribution metadata"):
+        tot_voxels = mask.size
+
+        slices_with_lesions = mask.any(axis=(0, 1))
+
+        metadata["patients_count"] += 1
+        metadata["lesions_per_patient"].append(label(mask)[-1])
+        metadata["tot_voxels"] += tot_voxels
+        metadata["slices_without_lesions"] += np.sum(~slices_with_lesions)
+        metadata["slices_with_lesions"] += np.sum(slices_with_lesions)
+
+        for slice_idx in range(mask.shape[-1]):
+            category, lesion_voxels, lesion_area = get_lesion_size_category(mask[..., slice_idx], return_all=True)
+            metadata["lesion_voxels"] += lesion_voxels
+            metadata[category]["lesion_area"].append(lesion_area)
+            metadata[category]["count"] += 1
+            metadata[category]["filepaths"].append((masks_filepaths[i], slice_idx))
+
+    if return_masks:
+        return metadata, masks
+
+    return metadata
+
+
+def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), return_distribution=False):
+    assert len(counts) == len(labels), "counts and labels must have same length"
+
+    items = zip(counts, labels)
+    sorted_items = sorted(items, key=lambda x: x[0], reverse=True)
+    counts, labels = zip(*sorted_items)
+
+    colors = plt.cm.tab20.colors[:len(labels)]
+    total = np.sum(counts)
+
+    plt.figure(figsize=figsize)
+    plt.bar(labels, counts, color=colors)
+    distributions = {}
+
+    for i, v in enumerate(counts):
+        p = v * 100 / total
+        distributions[labels[i]] = p
+        plt.text(i, v + 7.5, f"{p:.2f}%", ha="center")
+
+    plt.ylabel("Slices Without Lesions")
+    plt.xlabel("Lesion Size Categories")
+    plt.xticks(rotation=45)
+    plt.title("Lesion Size Distribution Across Slices")
+    plt.show()
+
+    if return_distribution:
+        return distributions
+    return None
 
 
 @torch.no_grad()

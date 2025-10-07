@@ -80,6 +80,7 @@ class MRIDataset(IterableDataset):
         overlap = (overlap[-3], 1.0, 1.0)
 
         self.scans = scans
+        self.masks = masks
 
         if isinstance(scans, str):
             # load file paths from directory

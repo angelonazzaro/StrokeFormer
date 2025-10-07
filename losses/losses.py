@@ -85,8 +85,8 @@ class SegmentationLoss(nn.Module):
                 seg_loss_total += seg_loss
                 seg_loss_count += 1
 
-        cls_loss = solve_reduction(cls_loss_total, self.reduction)
-        seg_loss = solve_reduction(seg_loss_total, self.reduction)
+        cls_loss = cls_loss_total / len(targets)
+        seg_loss = seg_loss_total / max(seg_loss_count, 1)
 
         total_loss = self.weights[0] * seg_loss + self.weights[1] * cls_loss
 

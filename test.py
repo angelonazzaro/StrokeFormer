@@ -22,7 +22,7 @@ def test(args):
         model_name = args.ckpt_path.split(os.path.sep)[-1].split("-")[:2]
 
     datamodule = MRIDataModule(paths={"test": {"scans": args.scans, "masks": args.masks}},
-                               subvolume_dim=args.subvolume_dim, overlap=args.stride,
+                               subvolume_dim=args.subvolume_dim, overlap=args.overlap,
                                batch_size=args.batch_size, num_workers=args.num_workers)
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
@@ -68,10 +68,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--scans', type=str, required=True, nargs='+')
     parser.add_argument('--masks', type=str, default=None, nargs='+')
-    parser.add_argument("--subvolume_dim",
-                        help="Optional tuple of three integers to resize (e.g., --subvolume_dim 128 128 128",
-                        nargs=3, type=int, required=False)
-    parser.add_argument("--stride", type=float, default=0.5)
+    parser.add_argument('--subvolume_dim', help='subvolume dimension for training', type=int, default=189)
+    parser.add_argument("--overlap", type=float, default=0.5)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--n_workers", type=int, default=0)
 

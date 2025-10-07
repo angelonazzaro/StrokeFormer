@@ -72,7 +72,7 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        loss = self.loss(logits, masks, return_dict=True)
+        loss = self.loss(logits, masks, prefix=prefix, return_dict=True)
 
         log_dict = {**loss}
 
