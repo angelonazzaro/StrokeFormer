@@ -1,19 +1,22 @@
-from typing import Optional, Literal, Union, Tuple, List
+from typing import Literal, Union, Tuple
 
-import monai.losses
 import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
+from losses import SegmentationLoss
 from model.segformer3d import SegFormer3D
 from utils import build_metrics
 
 
 class StrokeFormer(LightningModule):
     def __init__(self,
-                 losses: Union[dict, List[str], str] = ["DiceLoss", "BCEWithLogitsLoss"],
-                 losses_weights: Union[dict, List[float], float] = [0.5, 0.5],
-                 losses_configs: Optional[Union[dict, List[dict]]] = None,
+                 segmentation_loss: str = "DiceLoss",
+                 segmentation_loss_config: dict = {},
+                 prediction_loss: str = "BCEWithLogitsLoss",
+                 prediction_loss_config: dict = {},
+                 weights: Tuple[float, float] = (0.5, 0.5),
+                 reduction: Literal["mean", "sum", "none"] = "mean",
                  num_classes: int = 1,
                  in_channels: int = 1,
                  betas: tuple[float, float] = (0.9, 0.999),
@@ -25,50 +28,10 @@ class StrokeFormer(LightningModule):
                  weight_decay: float = 1e-3):
         super().__init__()
 
-        # TODO: handle dict for different heads
-        if isinstance(losses, str):
-            losses = [losses]
-            losses_weights = [losses_weights]
-            losses_configs = [losses_configs if losses_configs is not None else {}]
-
-        if losses_configs is None:
-            losses_configs = [{} for _ in range(len(losses))]
-
-        for loss_config in losses_configs:
-            for key in loss_config.keys():
-                if "weight" in key and not isinstance(loss_config[key], torch.Tensor):
-                    loss_config[key] = torch.tensor(loss_config[key]).to(self.device)
-
-        if len(losses) != len(losses_configs) or len(losses) != len(losses_weights):
-            raise ValueError("StrokeFormer:  losses, losses_configs and losses_weights must have same length")
-
-        if sum(losses_weights) != 1:
-            raise ValueError("StrokeFormer: losses_weights must sum up to 1")
-
-        self.losses = []
-        self.losses_configs = losses_configs
-        self.losses_weights = losses_weights
-
-        for loss, loss_config in zip(losses, losses_configs):
-            loss_cls = getattr(monai.losses, loss, None)
-
-            if loss_cls is None:
-                loss_cls = getattr(torch.nn, loss, None)
-
-            if loss_cls is None:
-                raise ValueError(
-                    f"StrokeFormer: Loss function '{loss}' is not supported in local module `monai.losses` or `torch.nn`.")
-
-            self.losses.append(loss_cls(**loss_config))
-
-        # this function is necessary to plot individual losses alongside the combination
-        def compute_loss(values, weights=None):
-            weights = weights if weights is not None else self.losses_weights
-            assert len(values) == len(weights), f"StrokeFormer: values and weights must have the same length when loss"
-
-            return sum(w * loss_val for w, loss_val in zip(weights, values))
-
-        self.loss = compute_loss
+        self.loss = SegmentationLoss(segmentation_loss=segmentation_loss,
+                                     segmentation_loss_config=segmentation_loss_config,
+                                     prediction_loss=prediction_loss, prediction_loss_config=prediction_loss_config,
+                                     weights=weights, reduction=reduction)
 
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
 
@@ -109,20 +72,9 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        loss_values = []
-        for loss in self.losses:
-            loss_val = loss(logits, masks)
-            loss_values.append(loss_val)
+        loss = self.loss(logits, masks, return_dict=True)
 
-            if len(self.losses) > 1:
-                self.log(f"{prefix}_{loss.__class__.__name__}", loss_val, prog_bar=True, on_step=True, on_epoch=True)
-
-        if len(self.losses) > 1:
-            loss = self.loss(loss_values)
-        else:
-            loss = loss_values[0]
-
-        log_dict = {f"{prefix}_loss": loss}
+        log_dict = {**loss}
 
         if self.num_classes > 2:
             predicted_masks = logits.softmax(dim=1)

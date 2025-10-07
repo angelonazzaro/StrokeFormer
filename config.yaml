@@ -116,16 +116,13 @@ trainer:
   default_root_dir: strokeformer
   model_registry: null
 model:
-  losses:
-  - DiceLoss
-  - BCEWithLogitsLoss
-  losses_weights:
+  segmentation_loss: DiceLoss
+  segmentation_loss_config: {}
+  prediction_loss: BCEWithLogitsLoss
+  prediction_loss_config: {}
+  weights:
   - 0.5
   - 0.5
-  losses_configs:
-  - sigmoid: true
-    squared_pred: true
-  - {}
   num_classes: 1
   in_channels: 1
   betas:
@@ -151,9 +148,12 @@ data:
   - 189
   - 192
   - 192
-  stride: 0.5
-  subvolume_dim:
-  - 128
+  subvolume_dim: 128
+  overlap:
+  - 0.5
+  - 0.5
+  - 0.5
+  resize_to:
   - 128
   - 128
   transforms: null
