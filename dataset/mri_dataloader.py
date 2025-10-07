@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as f
@@ -54,8 +54,9 @@ class MRIDataModule(LightningDataModule):
                  paths: dict,
                  ext: str = ".npy",
                  scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
-                 stride: Optional[float] = 0.5,
-                 subvolume_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]] = (128, 128, 128),
+                 subvolume_dim: Optional[int] = None,
+                 overlap: Optional[Union[float, Tuple[Optional[float], Optional[float], Optional[float]]]] = 0.5,
+                 resize_to: Optional[Tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  batch_size: int = 32,
@@ -70,7 +71,8 @@ class MRIDataModule(LightningDataModule):
 
         self.scan_dim = scan_dim
         self.subvolume_dim = subvolume_dim
-        self.stride = stride
+        self.overlap = overlap
+        self.resize_to = resize_to
 
         self.transforms = transforms
         self.augment = augment
@@ -93,8 +95,8 @@ class MRIDataModule(LightningDataModule):
                                                      masks=self.paths[split]["masks"],
                                                      ext=self.ext,
                                                      scan_dim=self.scan_dim,
-                                                     stride=self.stride,
-                                                     slices_per_scan=self.subvolume_dim[-3],
+                                                     overlap=self.overlap,
+                                                     subvolume_dim=self.subvolume_dim,
                                                      transforms=self.transforms,
                                                      augment=augment))
 
@@ -129,7 +131,7 @@ class MRIDataModule(LightningDataModule):
         scans, masks = zip(*batch)
         scans, masks = torch.stack(scans), torch.stack(masks)
 
-        if self.subvolume_dim is not None and len(self.subvolume_dim[1:]) == 2 and self.subvolume_dim[1:] != (None, None):
+        if self.resize_to is not None:
             # with align_corners = False and antialias = True this is equivalent to PIL downsample method
             # shape must be (B, D*C, H, W)
             # anti-alias is restricted to 4-D tensors
@@ -138,18 +140,18 @@ class MRIDataModule(LightningDataModule):
             masks = masks.view(B, C * D, H, W)
 
             scans = f.interpolate(scans,
-                                  size=(self.subvolume_dim[1], self.subvolume_dim[2]),
+                                  size=(self.resize_to[0], self.resize_to[1]),
                                   mode="bilinear",
                                   align_corners=False,
                                   antialias=True)
             masks = f.interpolate(masks,
-                                  size=(self.subvolume_dim[2], self.subvolume_dim[2]),
+                                  size=(self.resize_to[0], self.resize_to[1]),
                                   align_corners=False,
                                   mode="bilinear",
                                   antialias=True).long().to(dtype=scans.dtype)
 
             # restore original shape of (B, C, D, resize_h, resize_w)
-            scans = scans.view(B, C, D, self.subvolume_dim[1], self.subvolume_dim[2])
-            masks = masks.view(B, C, D, self.subvolume_dim[1], self.subvolume_dim[2])
+            scans = scans.view(B, C, D, self.resize_to[0], self.resize_to[1])
+            masks = masks.view(B, C, D, self.resize_to[0], self.resize_to[1])
 
         return scans, masks

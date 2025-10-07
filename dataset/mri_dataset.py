@@ -9,7 +9,7 @@ from torch.utils.data import IterableDataset
 from torchvision.transforms import v2
 
 from constants import SCAN_DIM
-from utils import round_half_up
+from utils import round_half_up, extract_patches
 
 
 class MRIDataset(IterableDataset):
@@ -18,8 +18,8 @@ class MRIDataset(IterableDataset):
                  masks: Optional[Union[List[str], str]] = None,
                  ext: str = ".npy",
                  scan_dim: Tuple[int, int, int, int,] = SCAN_DIM,
-                 slices_per_scan: int = SCAN_DIM[-3],
-                 stride: Optional[float] = 0.5,
+                 subvolume_dim: Optional[int] = None,
+                 overlap: Optional[Union[float, Tuple[Optional[float], Optional[float], Optional[float]]]] = 0.5,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  ):
@@ -44,12 +44,13 @@ class MRIDataset(IterableDataset):
             scan_dim (Tuple[int, int, int, int], default=(1, 189, 192, 192)):
                 Expected shape of each MRI scan in (Channels, Depth, Height, Width).
             
-            slices_per_scan (Tuple[int, int, int, int], default=(1, 189, 192, 192)):
-                Depth/N. of slices to consider for each volume (Channels, Depth, Height, Width).
+            subvolume_dim (int, default=None):
+                Size to consider along Z dimension when extracting subvolume.
+                If  None, the full Z dimension is used.
 
-            stride (float, default=0.5):
-                Stride size (fraction of patch size) when sliding the window over scans
-                to extract patches. If None, no stride is applied.
+            overlap (Union[float, Tuple[float, float, float]], default=0.5):
+                Amount of overlap between scans along each spatial dimension. If None, no overlap is applied. 
+                If float, the overlap wll be applied for all spatial dimensions. Currently, only the Z dimension is considered.
             
             resize_to: (dict, default= None):
                 A dictionary containing 'height' and 'width' keys that correspond 
@@ -64,11 +65,19 @@ class MRIDataset(IterableDataset):
                 If True, applies data augmentation strategies during training.
         """
 
-        if stride < 0.0 or stride > 1.0:
-            raise ValueError(f"`stride` must be within the range [0, 1]: {stride}")
+        # TODO: remove 1.0 in future when X, Y dimensions will be supported for patch/subvolume extraction
+        if isinstance(overlap, float):
+            overlap = (overlap, 1.0, 1.0)
 
-        if scan_dim[-3] < slices_per_scan:
-            raise ValueError(f"MRIDataset: `slices_per_scan` must be smaller than `depth` axis in scan_dim: {slices_per_scan} - {scan_dim[-3]}")
+        if isinstance(overlap, tuple):
+            overlap = tuple([o if o is not None else 1.0 for o in overlap])
+
+            for o in overlap:
+                if o is not None and (o < 0.0 or o > 1.0):
+                    raise ValueError(f"`overlap` must be within the range [0, 1]: {o}")
+
+        # TODO: remove when X, Y dimensions will be supported for patch/subvolume extraction
+        overlap = (overlap[-3], 1.0, 1.0)
 
         self.scans = scans
 
@@ -91,15 +100,14 @@ class MRIDataset(IterableDataset):
             self.masks = None
 
         self.scan_dim = scan_dim
-        self.slices_per_scan = slices_per_scan
-        self.stride = stride
+        self.subvolume_dim = subvolume_dim
+        self.overlap = overlap
 
-        D = scan_dim[-3]
-        self.subvolumes_num = round_half_up(D / slices_per_scan)
+        self.subvolumes_num = 1
 
-        if self.stride is not None:
-            patch_D = round_half_up(self.slices_per_scan * stride) if stride is not None else self.slices_per_scan
-            self.subvolumes_num = round_half_up(D / patch_D)
+        if self.overlap is not None:
+            patch_D = round_half_up(self.subvolume_dim * overlap[-3]) if overlap is not None else self.subvolume_dim
+            self.subvolumes_num = round_half_up(scan_dim[-3] / patch_D)
 
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
@@ -137,23 +145,14 @@ class MRIDataset(IterableDataset):
     def __iter__(self):
         # TODO: implement multiple workers logic to avoid data duplication
         indexes = list(range(len(self.scans)))
-        depth = self.scan_dim[-3]
 
         for index in indexes:
             scan, mask = self._load_data(index)
-            stride_D = round_half_up(self.slices_per_scan * self.stride) if self.stride is not None else self.slices_per_scan
 
-            for z in range(0, depth, stride_D):
-                scan_chunk = scan[:, z: z + self.slices_per_scan]
-                mask_chunk = mask[:, z: z + self.slices_per_scan]
+            scan_chunks = extract_patches(scan=scan, overlap=self.overlap, patch_dim=(self.subvolume_dim, None, None))
+            mask_chunks = extract_patches(scan=mask, overlap=self.overlap, patch_dim=(self.subvolume_dim, None, None))
 
-                if scan_chunk.shape[-3] != self.slices_per_scan:
-                    padding = (0, 0, 0, 0, 0, self.slices_per_scan - scan_chunk.shape[-3], 0, 0)
-
-                    scan_chunk = torch.nn.functional.pad(scan_chunk, padding)
-                    mask_chunk = torch.nn.functional.pad(mask_chunk, padding)
-
-                # per-volume z-score normalization
+            # per-subvolume z-score standardization
+            for scan_chunk, mask_chunk in zip(scan_chunks, mask_chunks):
                 scan_chunk = (scan_chunk - scan_chunk.mean()) / scan_chunk.std()
-
                 yield scan_chunk, mask_chunk
