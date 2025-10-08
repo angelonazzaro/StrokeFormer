@@ -1,8 +1,10 @@
+import csv
 import os
 from argparse import ArgumentParser
 from collections import defaultdict
 
 import einops
+import numpy as np
 import torch
 from pytorch_grad_cam import GradCAM
 
@@ -59,9 +61,13 @@ def test(args):
         os.makedirs(model_cam_dir, exist_ok=True)
 
     per_size_scores = {}
+    local_metrics = {}
+    global_metrics = defaultdict(list)
 
+    # TODO: should I keep the No Lesion?
     for size in LESION_SIZES:
         per_size_scores[size] = defaultdict(list)
+        local_metrics[size] = defaultdict(float)
 
     for batch in tqdm(dataloader, desc="Predicting lesions"):
         scans, masks = batch
@@ -96,7 +102,39 @@ def test(args):
 
                 args.n_predictions -= 1
 
-    # TODO: compute global metrics, save results file
+    scores_path = os.path.join(args.scores_dir, args.scores_file)
+    file_exists = os.path.exists(scores_path)
+
+    for size in per_size_scores.keys():
+        for metric in per_size_scores[size].keys():
+            local_metrics[size][metric] = np.mean(per_size_scores[size][metric])
+            global_metrics[metric].extend(per_size_scores[size][metric])
+
+    for metric in global_metrics.keys():
+        global_metrics[metric] = round(np.mean(global_metrics[metric]), 4)
+
+    global_metrics = {"model_name": args.model_name, **global_metrics}
+
+    with open(scores_path, mode="a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=global_metrics.keys())
+
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerow(global_metrics)
+
+    scores_path = os.path.join(args.scores_dir, args.per_size_scores_file)
+    file_exists = os.path.exists(scores_path)
+
+    with open(scores_path, "a", newline="") as f:
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow(["model_name", "size"] + list(local_metrics[size].keys()))
+
+        for size, metric_dict in local_metrics.items():
+            row = [args.model_name, size] + [round(local_metrics[size][m], 4) for m in metric_dict.keys()]
+            writer.writerow(row)
 
 
 if __name__ == "__main__":
