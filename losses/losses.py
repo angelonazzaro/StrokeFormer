@@ -68,7 +68,7 @@ class SegmentationLoss(nn.Module):
         """
         assert predictions.shape == targets.shape, "Predictions and targets must have the same shape"
 
-        seg_loss_total, cls_loss_total = torch.tensor(0.0), torch.tensor(0.0)
+        seg_loss_total, cls_loss_total = torch.tensor(0.0, device=predictions.device), torch.tensor(0.0, device=predictions.device)
         seg_loss_count = 0
 
         for p, tgt in zip(predictions, targets):

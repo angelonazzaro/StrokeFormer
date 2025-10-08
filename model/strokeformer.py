@@ -86,7 +86,7 @@ class StrokeFormer(LightningModule):
 
         self.log_dict(dictionary=log_dict, on_step=True, prog_bar=True, on_epoch=True)
 
-        return loss
+        return loss[f'{prefix}_loss']
 
     def training_step(self, batch):
         return self._common_step(batch, prefix='train')
