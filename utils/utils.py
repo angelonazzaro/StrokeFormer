@@ -7,7 +7,12 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import torch
+import einops
 from scipy.ndimage import label
+
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+
 from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
 from torchvision.transforms.v2.functional import to_pil_image
 from tqdm import tqdm
@@ -94,10 +99,39 @@ def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), return_distrib
     return None
 
 
-@torch.no_grad()
-def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: dict[partial]):
-    preds = model(scans, return_preds=True)
+
+class SegmentationModelOutputWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super(SegmentationModelOutputWrapper, self).__init__()
+        self.model = model
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class SemanticSegmentationTarget:
+    def __init__(self, mask):
+        if isinstance(mask, torch.Tensor):
+            self.mask = mask
+        else:
+            self.mask = torch.from_numpy(mask)
+
+        if torch.cuda.is_available():
+            self.mask = self.mask.cuda()
+
+    def __call__(self, model_output):
+        return (model_output * self.mask).sum()
+
+
+def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: dict[partial], cam_model=None):
+    with torch.no_grad():
+        preds = model(scans, return_preds=True)
+
     preds = (preds >= 0.5).float()
+    grayscale_cam = torch.zeros_like(preds[0])
+
+    if cam_model is not None:
+        grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks], eigen_smooth=False)  # noqa
 
     # randomly sample slices_per_scan
     if slices_per_scan < scans.shape[-3]:
@@ -105,9 +139,7 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
         masks = masks[:, :, random_slices]
         scans = scans[:, :, random_slices]
         preds = preds[:, :, random_slices]
-    else:
-        masks = masks
-        scans = scans
+        grayscale_cam = grayscale_cam[:, random_slices]
 
     for scan, predicted_mask, mask in zip(scans, preds, masks):
         for slice_idx in range(scan.shape[-3]):
@@ -129,8 +161,7 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
             gt = overlay_img(scan_slice, mask_slice, color=(0, 255, 0))
             pd = overlay_img(scan_slice, predicted_slice, color=(255, 0, 0))
 
-            # yield results for this slice
-            yield {
+            results = {
                 "scan_slice": scan_slice,
                 "mask_slice": mask_slice,
                 "slice_idx": slice_idx,
@@ -140,6 +171,12 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
                 "pd": pd,
                 "scores": scores,
             }
+
+            if cam_model is not None:
+                cam_image = show_cam_on_image(scan_slice / 255, grayscale_cam[:, slice_idx].squeeze(), use_rgb=True)
+                results["cam_image"] = cam_image
+
+            yield results
 
 
 def get_lesion_size_category(mask, return_all: bool = False):
