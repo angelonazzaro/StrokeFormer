@@ -19,6 +19,10 @@ def instantiate_loss(loss: str, config: dict):
     if loss_cls is None:
         loss_cls = getattr(nn, loss)
 
+    for key in config.keys():
+        if "weight" in key and not isinstance(config[key], torch.Tensor):
+            config[key] = torch.tensor(config[key])
+
     return loss_cls(**config)
 
 
