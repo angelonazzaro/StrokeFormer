@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import subprocess
 from argparse import ArgumentParser
 from glob import glob
 
@@ -30,7 +31,7 @@ def main(args):
         raise ValueError("The sum of splits must be exactly 100.")
 
     logger.info("=" * 80)
-    logger.info(f"Starting Cross-Validation with {args.k} folds")
+    logger.info(f"Starting Cross-Validation with {args.k} folds - Model: {args.model_prefix}")
     logger.info(f"Random seed set to {args.seed}")
     logger.info("=" * 80)
 
@@ -94,6 +95,11 @@ def main(args):
     n_test_folds = round_half_up(len(folds) * args.splits[2] / 100)
     logger.info(f"Fold distribution — Train: {args.splits[0]}%, Val: {args.splits[1]}%, Test: {args.splits[2]}%")
 
+    def _plot_fold_distribution(fold_masks_paths, title):
+        fold_metadata = get_lesion_distribution_metadata(fold_masks_paths)
+        counts = [fold_metadata[size]["count"] for size in LESION_SIZES]
+        plot_lesion_size_distribution(counts, LESION_SIZES, title=title)
+
     for k in range(args.k):
         logger.info("-" * 80)
         logger.info(f"[Fold {k + 1}/{args.k}] Starting training and evaluation")
@@ -108,6 +114,12 @@ def main(args):
 
         train_masks_paths = list(volume_dist.loc[train_folds].filepath)
         val_masks_paths = list(volume_dist.loc[val_folds].filepath)
+        test_masks_paths = list(volume_dist.loc[test_folds].filepath)
+
+        # plot size distribution per set to make sure cross validation created folds of distribution equal to that of the dataset's
+        _plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
+        _plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
+        _plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
 
         def _make_paths(filepaths):
             masks = [fp for fp in filepaths]
@@ -165,7 +177,7 @@ def main(args):
                 mode="min",
             ),
             ModelCheckpoint(
-                filename=f"{args.model_prefix}-fold{k + 1}-{{epoch:02d}}-{{val_loss:.2f}}",
+                filename=f"{args.model_prefix}-fold-{k + 1}-{{epoch:02d}}-{{val_loss:.2f}}",
                 monitor="val_loss",
                 mode="min",
                 save_top_k=1,
@@ -176,7 +188,8 @@ def main(args):
             project=args.project,
             entity=args.entity,
             offline=args.offline,
-            name=f"{args.model_prefix}-fold{k + 1}",
+            group=args.group,
+            name=f"{args.model_prefix}-fold-{k + 1}",
         )
 
         trainer = Trainer(
@@ -190,8 +203,35 @@ def main(args):
         trainer.fit(model, datamodule=datamodule)
         wandb.finish()
 
-        logger.info(f"[Fold {k + 1}/{args.k}] Testing phase starting...")
-        # TODO: finish testing
+        logger.info(f"[Fold {k + 1}/{args.k}] Testing started...")
+
+        test_paths = _make_paths(test_masks_paths)
+
+        ckpt_dir = os.path.join(args.default_root_dir, trainer.logger.experiment.id, "checkpoints")
+        ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][-1]
+
+        cmd = [
+            "python", "test.py",
+            "--seed", str(args.seed),
+            "--batch_size", str(args.batch_size),
+            "--scans", *test_paths["scans"],
+            "--masks", *test_paths["masks"],
+            "--ckpt_path", ckpt_path,
+            "--model_name", f"{args.model_prefix}-{k}-fold",
+            "--slices_per_scan", str(args.slices_per_scan),
+            "--scores_file", "cross_scores.csv",
+            "--per_size_scores_file", "per_size_cross_scores.csv",
+        ]
+
+        if args.resize_to is not None:
+            cmd.extend(["--resize_to", str(args.resize_to[0]), str(args.resize_to[1])])
+
+        if args.target_layers is not None:
+            cmd.append("--target_layers")
+            for target_layer in args.target_layers:
+                cmd.append(target_layer)
+
+        subprocess.run(cmd, check=True)
 
 
 if __name__ == "__main__":
@@ -230,10 +270,11 @@ if __name__ == "__main__":
     parser.add_argument("--weights", nargs=2, type=float, default=(0.5, 0.5))
 
     # training
-    parser.add_argument("--default_root_dir", type=str, default="./strokeformer")
+    parser.add_argument("--default_root_dir", type=str, default="StrokeFormer")
     parser.add_argument("--project", type=str, default="StrokeFormer")
     parser.add_argument("--entity", type=str, default="neurone-lab")
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--group", type=str, default=None)
     parser.add_argument("--max_epochs", type=int, default=250)
     parser.add_argument("--patience", type=int, default=50)
     parser.add_argument("--min_delta", type=float, default=0.001)
@@ -242,6 +283,12 @@ if __name__ == "__main__":
     parser.add_argument("--log_every_n_val_epochs", type=int, default=5)
     parser.add_argument("--slices_per_scan", type=int, default=20)
     parser.add_argument("--model_prefix", type=str, required=True)
+
+    # testing
+    parser.add_argument("--target_layers", help="Target layers for Grad-CAM. If None, Grad-CAM will not be executed.",
+                        nargs="+", default=None)
+    parser.add_argument("--scores_dir", help="Directory to save predictions and scores.", type=str, default="./scores")
+    parser.add_argument("--scores_file", type=str, default="scores.csv")
 
     args = parser.parse_args()
     main(args)
