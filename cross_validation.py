@@ -217,7 +217,7 @@ def main(args):
             "--scans", *test_paths["scans"],
             "--masks", *test_paths["masks"],
             "--ckpt_path", ckpt_path,
-            "--model_name", f"{args.model_prefix}-{k}-fold",
+            "--model_name", f"{args.model_prefix}-{k + 1}-fold",
             "--slices_per_scan", str(args.slices_per_scan),
             "--scores_file", "cross_scores.csv",
             "--per_size_scores_file", "per_size_cross_scores.csv",
