@@ -6,7 +6,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 from losses import SegmentationLoss
 from model.segformer3d import SegFormer3D
-from utils import build_metrics
+from utils import build_metrics, compute_metrics
 
 
 class StrokeFormer(LightningModule):
@@ -72,21 +72,21 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        loss = self.loss(logits, masks, prefix=prefix, return_dict=True)
-
-        log_dict = {**loss}
+        loss_dict = self.loss(logits, masks, prefix=prefix, return_dict=True)
 
         if self.num_classes > 2:
             predicted_masks = logits.softmax(dim=1)
         else:
             predicted_masks = logits.sigmoid()
 
-        for metric in self.metrics:
-            log_dict[f"{prefix}_{metric}"] = self.metrics[metric](predicted_masks, masks)  # noqa
+        log_dict = {
+            **loss_dict,
+            **compute_metrics(predicted_masks, masks, metrics=self.metrics, prefix=prefix),
+        }
 
         self.log_dict(dictionary=log_dict, on_step=True, prog_bar=True, on_epoch=True)
 
-        return loss[f'{prefix}_loss']
+        return loss_dict[f'{prefix}_loss']
 
     def training_step(self, batch):
         return self._common_step(batch, prefix='train')

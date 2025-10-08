@@ -1,26 +1,21 @@
 import math
 import random
 from functools import partial
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Literal
 
 import matplotlib.pyplot as plt
+import monai.metrics.metric
 import nibabel as nib
 import numpy as np
 import torch
-import einops
-from scipy.ndimage import label
-
-from pytorch_grad_cam import GradCAM
+from monai.metrics import DiceMetric, MeanIoU, HausdorffDistanceMetric
 from pytorch_grad_cam.utils.image import show_cam_on_image
-
-from torchmetrics.functional import accuracy, recall, f1_score, fbeta_score, matthews_corrcoef
+from scipy.ndimage import label
+from torchmetrics.functional import accuracy, recall, f1_score, auroc, precision
 from torchvision.transforms.v2.functional import to_pil_image
 from tqdm import tqdm
 
 from constants import LESION_SIZES
-
-
-# from monai.metrics import DiceMetric, MeanIoU, AveragePrecisionMetric
 
 
 def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[str] = LESION_SIZES,
@@ -69,7 +64,7 @@ def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[st
     return metadata
 
 
-def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), return_distribution=False):
+def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, return_distribution=False):
     assert len(counts) == len(labels), "counts and labels must have same length"
 
     items = zip(counts, labels)
@@ -91,13 +86,14 @@ def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), return_distrib
     plt.ylabel("Slices Without Lesions")
     plt.xlabel("Lesion Size Categories")
     plt.xticks(rotation=45)
-    plt.title("Lesion Size Distribution Across Slices")
+    if title is None:
+        title = "Lesion Size Distribution Across Slices"
+    plt.title(title)
     plt.show()
 
     if return_distribution:
         return distributions
     return None
-
 
 
 class SegmentationModelOutputWrapper(torch.nn.Module):
@@ -123,6 +119,41 @@ class SemanticSegmentationTarget:
         return (model_output * self.mask).sum()
 
 
+def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: dict[partial], prefix: Optional[Literal['train', 'val', 'test']] = None):
+    scores = {}
+    prefix = f"{prefix}_" if prefix is not None else ""
+
+    for name, metric_fn in metrics.items():
+        is_cumulative = isinstance(metric_fn, monai.metrics.metric.Cumulative)
+
+        if is_cumulative:
+            # Hausdorff distance needs at least 4D: (B, C, H, W)
+            # other MONAI metrics need at least 3D: (C, H, W)
+            min_dim = 4 if name == "hausdorff_distance" else 3
+            if predictions.ndim < min_dim:
+                # prepend singleton dimensions to reach required rank
+                pad_dims = (min_dim - predictions.ndim)
+                new_shape = (1,) * pad_dims + tuple(predictions.shape)
+                preds = predictions.view(new_shape)
+                targs = targets.view(new_shape)
+            else:
+                preds, targs = predictions, targets
+
+            metric_fn(preds, targs)
+            raw_score = metric_fn.aggregate().mean()
+        else:
+            if name == "auroc":
+                targs = targets.long()
+            else:
+                targs = targets
+
+            raw_score = metric_fn(predictions, targs)
+
+        scores[f"{prefix}{name}"] = float(raw_score)
+
+    return scores
+
+
 def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: dict[partial], cam_model=None):
     with torch.no_grad():
         preds = model(scans, return_preds=True)
@@ -131,7 +162,8 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
     grayscale_cam = torch.zeros_like(preds[0])
 
     if cam_model is not None:
-        grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks], eigen_smooth=False)  # noqa
+        grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks],
+                                  eigen_smooth=False)  # noqa
 
     # randomly sample slices_per_scan
     if slices_per_scan < scans.shape[-3]:
@@ -147,7 +179,7 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
             mask_slice = mask[0, slice_idx, ...]
             predicted_slice = predicted_mask[0, slice_idx, ...]
 
-            scores = {metric: metrics[metric](predicted_slice, mask_slice).cpu().item() for metric in metrics}
+            scores = compute_metrics(predicted_slice, mask_slice, metrics)
 
             # normalize scan as RGB conversion requires [0,1] range
             scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
@@ -199,47 +231,90 @@ def get_lesion_size_category(mask, return_all: bool = False):
     return size_category
 
 
-def build_metrics(num_classes: int):
+def lesion_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray], target: Union[torch.Tensor, np.ndarray]):
+    """
+    Computes lesion-wise false positives and false negatives.
+
+    Args:
+        prediction: Ground truth binary mask (C x D x H x W)
+        target: Predicted binary mask (C x D H x W)
+
+    Returns:
+        dict with lesion-wise TP, FP, FN counts and derived rates
+    """
+    # Label connected components
+    gt_labeled, gt_count = label(target, structure=np.ones((3,) * target.ndim))
+    pred_labeled, pred_count = label(prediction, structure=np.ones((3,) * target.ndim))
+
+    tp = 0
+    matched_gt = set()
+
+    for pred_id in range(1, pred_count + 1):
+        pred_component = (pred_labeled == pred_id)
+        overlap_ids = np.unique(gt_labeled[pred_component])
+        overlap_ids = overlap_ids[overlap_ids != 0]
+
+        if len(overlap_ids) > 0:
+            tp += 1
+            matched_gt.update(overlap_ids)
+
+    fn = gt_count - len(matched_gt)
+    fp = pred_count - tp
+
+    return {
+        "lesion_TP": tp,
+        "lesion_FP": fp,
+        "lesion_FN": fn,
+        "lesion_sensitivity": tp / (tp + fn + 1e-8),
+        "lesion_precision": tp / (tp + fp + 1e-8),
+    }
+
+
+def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted", "none"] = "micro"):
     task = "binary" if num_classes <= 2 else "multiclass"
     return {
         "accuracy": partial(
             accuracy,
             task=task,
             num_classes=num_classes,
-            average='macro',
+            average=average,
             ignore_index=None
         ),
-        # "precision": AveragePrecisionMetric(),
+        "precision": partial(
+            precision,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None
+        ),
         "recall": partial(
             recall,
             task=task,
             num_classes=num_classes,
             ignore_index=None,
-            average='macro'
+            average=average
         ),
         "f1": partial(
             f1_score,
             task=task,
             num_classes=num_classes,
-            average='macro',
+            average=average,
             ignore_index=None
         ),
-        "f2": partial(
-            fbeta_score,
-            beta=2.0,
+        "auroc": partial(
+            auroc,
             task=task,
             num_classes=num_classes,
-            average='macro',
+            average=average,
             ignore_index=None
         ),
-        # "iou": MeanIoU(),
-        "mcc": partial(
-            matthews_corrcoef,
-            task=task,
-            num_classes=num_classes,
-            ignore_index=None  # semantic_loss_ignore_index
-        ),
-        # "dice": DiceMetric(num_classes=num_classes),
+        "iou": MeanIoU(get_not_nans=False),
+        "dice": DiceMetric(num_classes=num_classes, get_not_nans=False),
+        "hausdorff_distance": HausdorffDistanceMetric(
+            get_not_nans=False,
+            percentile=95,
+            distance_metric='euclidean',
+        )
     }
 
 
