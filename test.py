@@ -1,5 +1,7 @@
 import csv
 import os
+import logging
+import time
 from argparse import ArgumentParser
 from collections import defaultdict
 
@@ -18,123 +20,133 @@ from model import StrokeFormer
 from utils import predictions_generator
 
 
-def test(args):
-    model = StrokeFormer.load_from_checkpoint(args.ckpt_path)
-    model_name = args.model_name
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
-    if model_name is None:
-        model_name = args.ckpt_path.split(os.path.sep)[-1].split("-")[:2]
+def test(args):
+    start_time = time.time()
+    logger.info("=== Starting test evaluation ===")
+
+    logger.info(f"Loading model checkpoint from {args.ckpt_path}")
+    model = StrokeFormer.load_from_checkpoint(args.ckpt_path)
+    model.eval()
+
+    model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
+    logger.info(f"Using model name: {model_name}")
 
     cam_model = None
-
-    if args.target_layers is not None:
+    if args.target_layers:
+        logger.info(f"Setting up GradCAM for layers: {args.target_layers}")
         target_layers = []
-        for target_layer in args.target_layers:
+        for layer_path in args.target_layers:
             layer = model
-            for attr in target_layer.split("."):
+            for attr in layer_path.split("."):
                 layer = getattr(layer, attr)
             target_layers.append(layer)
-
         cam_model = GradCAM(model, target_layers=target_layers)
 
     if len(args.scans) == 1 and os.path.isdir(args.scans[0]):
         args.scans = args.scans[0]
-
     if len(args.masks) == 1 and os.path.isdir(args.masks[0]):
         args.masks = args.masks[0]
 
-    datamodule = MRIDataModule(paths={"test": {"scans": args.scans, "masks": args.masks}},
-                               subvolume_dim=args.subvolume_dim, overlap=args.overlap,
-                               resize_to=args.resize_to,
-                               batch_size=args.batch_size, num_workers=args.num_workers)
+    datamodule = MRIDataModule(
+        paths={"test": {"scans": args.scans, "masks": args.masks}},
+        subvolume_dim=args.subvolume_dim,
+        overlap=args.overlap,
+        resize_to=args.resize_to,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers
+    )
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
-
-    model.eval()
+    logger.info(f"Loaded test dataloader: {len(dataloader.dataset)} samples")
 
     os.makedirs(args.scores_dir, exist_ok=True)
     model_prediction_dir = os.path.join(args.scores_dir, model_name, "predictions")
     model_cam_dir = os.path.join(args.scores_dir, model_name, "gradcam")
     os.makedirs(model_prediction_dir, exist_ok=True)
-
     if cam_model is not None:
         os.makedirs(model_cam_dir, exist_ok=True)
 
-    per_size_scores = {}
-    local_metrics = {}
+    logger.info(f"Predictions will be saved to {model_prediction_dir}")
+    if cam_model:
+        logger.info(f"GradCAM visualizations will be saved to {model_cam_dir}")
+
+    per_size_scores = {size: defaultdict(list) for size in LESION_SIZES}
+    local_metrics = {size: defaultdict(float) for size in LESION_SIZES}
     global_metrics = defaultdict(list)
 
-    # TODO: should I keep the No Lesion?
-    for size in LESION_SIZES:
-        per_size_scores[size] = defaultdict(list)
-        local_metrics[size] = defaultdict(float)
+    total_batches = len(dataloader)
+    logger.info(f"Starting testing on {total_batches} batches")
 
-    for batch in tqdm(dataloader, desc="Predicting lesions"):
+    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Predicting lesions")):
         scans, masks = batch
-        i = 0
-        for j, result in enumerate(predictions_generator(model, scans, masks, args.slices_per_scan, model.metrics, cam_model)):
-            os.makedirs(os.path.join(model_prediction_dir, f"scan_{i}"), exist_ok=True)
+        scans, masks = scans.to(model.device), masks.to(model.device)
+        pred_dir = os.path.join(model_prediction_dir, f"scan_{batch_idx}")
+        grad_dir = os.path.join(model_cam_dir, f"scan_{batch_idx}")
+        os.makedirs(pred_dir, exist_ok=True)
 
-            if cam_model is not None:
-                os.makedirs(os.path.join(model_cam_dir, f"scan_{i}"), exist_ok=True)
+        if cam_model:
+            os.makedirs(grad_dir, exist_ok=True)
 
-            for metric in result['scores']:
-                per_size_scores[result["lesion_size"]][metric].append(result['scores'][metric])
+        for j, result in enumerate(predictions_generator(model=model, scans=scans, masks=masks, metrics=model.metrics, cam_model=cam_model)):
+            lesion_size = result["lesion_size"]
 
-            if j % args.slices_per_scan == 0 and j > 0:
-                i += 1
+            for metric_name, value in result["scores"].items():
+                per_size_scores[lesion_size][metric_name].append(value)
+                global_metrics[metric_name].append(value)
 
-            if args.n_predictions > 0:
-                gt, pd = torch.tensor(result['gt']), torch.tensor(result['pd'])
-                gt, pd = einops.rearrange(gt, 'h w c -> c h w'), einops.rearrange(pd, 'h w c -> c h w')
+            if args.n_predictions > batch_idx:
+                gt, pd = map(torch.tensor, (result["gt"], result["pd"]))
+                gt, pd = map(lambda x: einops.rearrange(x, "h w c -> c h w"), (gt, pd))
 
-                grid = make_grid([gt, pd], nrow=2, normalize=False, scale_each=False)
-                grid_img = to_pil_image(grid)
-                grid_img.save(os.path.join(model_prediction_dir, f"scan_{i}", f"{result['lesion_size']}.png"))  # noqa
+                grid = make_grid([gt, pd], nrow=2)
+                to_pil_image(grid).save(os.path.join(pred_dir, f"{lesion_size.replace(' ', '_')}_{batch_idx}_{j}.png"))
 
-                if cam_model is not None:
+                if cam_model:
                     cam_image = torch.tensor(result["cam_image"])
-                    cam_image = einops.rearrange(cam_image, 'h w c -> c h w')
+                    cam_image = einops.rearrange(cam_image, "h w c -> c h w")
+                    grid = make_grid([gt, pd, cam_image], nrow=3)
+                    to_pil_image(grid).save(os.path.join(grad_dir, f"{lesion_size.replace(' ', '_')}_{batch_idx}_{j}.png"))
 
-                    grid = make_grid(torch.stack([gt, pd, cam_image]), nrow=3, normalize=False, scale_each=False)
-                    grid_img = to_pil_image(grid)
-                    grid_img.save(os.path.join(model_cam_dir, f"scan_{i}", f"gradcam_{result['lesion_size']}.png"))  # noqa
+    logger.info(f"Testing complete.")
 
-                args.n_predictions -= 1
+    for size, metric_dict in per_size_scores.items():
+        for metric, values in metric_dict.items():
+            local_metrics[size][metric] = float(np.mean(values))
+
+    global_metrics = {metric: round(float(np.mean(values)), 4) for metric, values in global_metrics.items()}
+    global_metrics = {"model_name": model_name, **global_metrics}
 
     scores_path = os.path.join(args.scores_dir, args.scores_file)
+    per_size_path = os.path.join(args.scores_dir, args.per_size_scores_file)
+
+    logger.info(f"Writing global metrics to: {scores_path}")
     file_exists = os.path.exists(scores_path)
-
-    for size in per_size_scores.keys():
-        for metric in per_size_scores[size].keys():
-            local_metrics[size][metric] = np.mean(per_size_scores[size][metric])
-            global_metrics[metric].extend(per_size_scores[size][metric])
-
-    for metric in global_metrics.keys():
-        global_metrics[metric] = round(np.mean(global_metrics[metric]), 4)
-
-    global_metrics = {"model_name": args.model_name, **global_metrics}
-
-    with open(scores_path, mode="a", newline="") as f:
+    with open(scores_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=global_metrics.keys())
-
         if not file_exists:
             writer.writeheader()
-
         writer.writerow(global_metrics)
 
-    scores_path = os.path.join(args.scores_dir, args.per_size_scores_file)
-    file_exists = os.path.exists(scores_path)
-
-    with open(scores_path, "a", newline="") as f:
+    logger.info(f"Writing per-size metrics to: {per_size_path}")
+    file_exists = os.path.exists(per_size_path)
+    with open(per_size_path, "a", newline="") as f:
         writer = csv.writer(f)
-
         if not file_exists:
-            writer.writerow(["model_name", "size"] + list(local_metrics[size].keys()))
-
+            writer.writerow(["model_name", "size"] + list(next(iter(local_metrics.values())).keys()))
         for size, metric_dict in local_metrics.items():
-            row = [args.model_name, size] + [round(local_metrics[size][m], 4) for m in metric_dict.keys()]
+            row = [model_name, size] + [round(v, 4) for v in metric_dict.values()]
             writer.writerow(row)
+
+    elapsed = time.time() - start_time
+    logger.info(f"=== Test evaluation complete in {elapsed:.2f}s ===")
+    logger.info(f"Global metrics: {global_metrics}")
 
 
 if __name__ == "__main__":
@@ -157,10 +169,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_layers", help="Target layers for Grad-CAM. If None, Grad-CAM will not be executed.",
                         nargs="+", default=None)
 
-    parser.add_argument("--n_predictions", help="Number of predictions to save", type=int, default=100)
-    parser.add_argument("--slices_per_scan",
-                        help="Number of slices to save from the predictions for quality inspection", type=int,
-                        default=20)
+    parser.add_argument("--n_predictions", help="Number of predictions to save", type=int, default=30)
     parser.add_argument("--scores_dir", help="Directory to save predictions and scores.", type=str, default="./scores")
     parser.add_argument("--scores_file", type=str, default="scores.csv")
     parser.add_argument("--per_size_scores_file", type=str, default="per_size_scores.csv")

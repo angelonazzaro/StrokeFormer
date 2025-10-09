@@ -154,7 +154,12 @@ def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: d
     return scores
 
 
-def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: dict[partial], cam_model=None):
+def reset_metrics(metrics):
+    for name, metric_fn in metrics.items():
+        if isinstance(metric_fn, monai.metrics.metric.Cumulative):
+            metric_fn.reset()
+
+def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None, cam_model=None):
     with torch.no_grad():
         preds = model(scans, return_preds=True)
 
@@ -166,18 +171,20 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
                                   eigen_smooth=False)  # noqa
 
     # randomly sample slices_per_scan
-    if slices_per_scan < scans.shape[-3]:
+    if slices_per_scan is not None and slices_per_scan < scans.shape[-3]:
         random_slices = random.choices(np.arange(masks.shape[-3]), k=slices_per_scan)
         masks = masks[:, :, random_slices]
         scans = scans[:, :, random_slices]
         preds = preds[:, :, random_slices]
         grayscale_cam = grayscale_cam[:, random_slices]
 
-    for scan, predicted_mask, mask in zip(scans, preds, masks):
-        for slice_idx in range(scan.shape[-3]):
-            scan_slice = scan[0, slice_idx, ...]
-            mask_slice = mask[0, slice_idx, ...]
-            predicted_slice = predicted_mask[0, slice_idx, ...]
+    for i in range(scans.shape[0]):
+        for slice_idx in range(scans[i].shape[-3]):
+            scan_slice = scans[i][0, slice_idx, ...]
+            mask_slice = masks[i][0, slice_idx, ...]
+            predicted_slice = preds[i][0, slice_idx, ...]
+
+            lesion_size = get_lesion_size_category(mask_slice)
 
             scores = compute_metrics(predicted_slice, mask_slice, metrics)
 
@@ -187,8 +194,6 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
             scan_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
             mask_slice = np.asarray(to_pil_image(mask_slice).convert("RGB"))
             predicted_slice = np.asarray(to_pil_image(predicted_slice).convert("RGB"))
-
-            lesion_size = get_lesion_size_category(mask_slice)
 
             gt = overlay_img(scan_slice, mask_slice, color=(0, 255, 0))
             pd = overlay_img(scan_slice, predicted_slice, color=(255, 0, 0))
@@ -205,13 +210,16 @@ def predictions_generator(model, scans, masks, slices_per_scan: int, metrics: di
             }
 
             if cam_model is not None:
-                cam_image = show_cam_on_image(scan_slice / 255, grayscale_cam[:, slice_idx].squeeze(), use_rgb=True)
+                cam_image = show_cam_on_image(scan_slice / 255, grayscale_cam[i, slice_idx], use_rgb=True)
                 results["cam_image"] = cam_image
 
             yield results
 
 
-def get_lesion_size_category(mask, return_all: bool = False):
+def get_lesion_size_category(mask: Union[torch.Tensor, np.ndarray], return_all: bool = False):
+    if isinstance(mask, torch.Tensor):
+        mask = mask.cpu().numpy()
+
     slice_area = mask.size
     lesion_voxels = np.sum(mask)
     lesion_area = lesion_voxels / slice_area

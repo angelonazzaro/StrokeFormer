@@ -1,11 +1,11 @@
-from typing import Any, List
+from typing import Any, List, Optional
 
 import torch
 import wandb
 from lightning import Callback
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 
-from utils import predictions_generator
+from utils import predictions_generator, reset_metrics
 
 
 class LogPredictionCallback(Callback):
@@ -19,7 +19,7 @@ class LogPredictionCallback(Callback):
             - prediction
     """
 
-    def __init__(self, num_images: int, log_every_n_val_epochs: int, slices_per_scan: int):
+    def __init__(self, num_images: int, log_every_n_val_epochs: int, slices_per_scan: Optional[int] = None):
         self.num_images = num_images
         self.scans = []
         self.masks = []
@@ -51,8 +51,9 @@ class LogPredictionCallback(Callback):
             self.masks = torch.cat(self.masks)
 
         i = 0
-        for j, result in enumerate(predictions_generator(pl_module, self.scans, self.masks, self.slices_per_scan, pl_module.metrics)):
+        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan)):
             table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]), wandb.Image(result["pd"]), *result["scores"].values())
+            reset_metrics(pl_module.metrics)
             if j % self.slices_per_scan == 0:
                 i += 1
 
