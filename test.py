@@ -130,15 +130,16 @@ def test(args):
         grayscale_cam = torch.zeros_like(preds[0])
 
         if cam_model is not None:
-            grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks], eigen_smooth=False) # noqa
+            grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks],
+                                      eigen_smooth=False)  # noqa
             grayscale_cam = torch.from_numpy(grayscale_cam)
 
         predictions_until_now = batch_idx * args.batch_size
         for i in range(preds.shape[0]):
             if args.n_predictions > predictions_until_now:
 
-                pred_dir = os.path.join(model_prediction_dir, f"scan_{predictions_until_now + i}") # noqa
-                grad_dir = os.path.join(model_cam_dir, f"scan_{predictions_until_now + i}") # noqa
+                pred_dir = os.path.join(model_prediction_dir, f"scan_{predictions_until_now + i}")  # noqa
+                grad_dir = os.path.join(model_cam_dir, f"scan_{predictions_until_now + i}")  # noqa
 
                 os.makedirs(pred_dir, exist_ok=True)
 
@@ -172,11 +173,13 @@ def test(args):
 
                 if args.n_predictions > predictions_until_now:
                     grid = make_grid([gt, pd], nrow=2)
-                    to_pil_image(grid).save(os.path.join(pred_dir, f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png")) # noqa
+                    to_pil_image(grid).save(os.path.join(pred_dir,
+                                                         f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png"))  # noqa
 
                     if cam_model:
                         grid = make_grid([gt, pd, grayscale_cam[i]], nrow=3)
-                        to_pil_image(grid).save(os.path.join(grad_dir, f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png")) # noqa
+                        to_pil_image(grid).save(os.path.join(grad_dir,
+                                                             f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png"))  # noqa
 
     logger.info("Inference complete. Computing metrics...")
 

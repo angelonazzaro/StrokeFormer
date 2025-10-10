@@ -6,7 +6,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 from losses import SegmentationLoss
 from model.segformer3d import SegFormer3D
-from utils import build_metrics, compute_metrics, reset_metrics
+from utils import build_metrics, compute_metrics
 
 
 class StrokeFormer(LightningModule):
@@ -84,18 +84,18 @@ class StrokeFormer(LightningModule):
             **compute_metrics(predicted_masks, masks, metrics=self.metrics, prefix=prefix),
         }
 
-        self.log_dict(dictionary=log_dict, on_step=True, prog_bar=True, on_epoch=True)
+        loss = loss_dict[f'{prefix}_loss']
 
-        return loss_dict[f'{prefix}_loss']
+        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
+        del loss_dict
+
+        return loss
 
     def training_step(self, batch):
         return self._common_step(batch, prefix='train')
 
     def validation_step(self, batch):
         return self._common_step(batch, prefix='val')
-
-    def on_validation_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int = 0):
-        reset_metrics(self.metrics)
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, eps=self.eps,

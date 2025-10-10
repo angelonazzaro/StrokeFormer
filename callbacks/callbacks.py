@@ -5,7 +5,7 @@ import wandb
 from lightning import Callback
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 
-from utils import predictions_generator, reset_metrics
+from utils import predictions_generator
 
 
 class LogPredictionCallback(Callback):
@@ -53,7 +53,6 @@ class LogPredictionCallback(Callback):
         i = 0
         for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan)):
             table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]), wandb.Image(result["pd"]), *result["scores"].values())
-            reset_metrics(pl_module.metrics)
             if j % self.slices_per_scan == 0:
                 i += 1
 
