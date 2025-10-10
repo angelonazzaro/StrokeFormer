@@ -167,20 +167,22 @@ def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted
     }
 
 
-def generate_overlayed_slice(slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False):
-    if slice.min() < 0 or slice.max() > 1:
+def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False, return_rgbs: bool = False):
+    if scan_slice.min() < 0 or scan_slice.max() > 1:
         # normalize scan as RGB conversion requires [0,1] range
-        slice = (slice - slice.min()) / (slice.max() - slice.min())
+        scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
 
-    slice = np.asarray(to_pil_image(slice).convert("RGB"))
+    scan_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
     mask_slice = np.asarray(to_pil_image(mask_slice).convert("RGB"))
 
-    overlay = overlay_img(slice, mask_slice, color=color)
+    overlay = overlay_img(scan_slice, mask_slice, color=color)
 
     if return_tensor:
         overlay = torch.from_numpy(overlay)
         overlay = einops.rearrange(overlay, "h w c -> c h w")
-        return overlay
+
+    if return_rgbs:
+        return overlay, scan_slice, mask_slice
     return overlay
 
 
@@ -288,14 +290,8 @@ def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
     fn = ((1 - prediction_flat) * target_flat).sum()
 
     fp_norm = fp.float() / total_voxels
-
-    # no positives in GT
-    if lesion_size == 0:
-        return {"tp": torch.tensor(0.0).item(), "fp": fp_norm.item(), "fn": torch.tensor(0.0)}
-
-    tp_norm = tp.float() / lesion_size
-
     fn_norm = fn.float() / total_voxels
+    tp_norm = tp.float() / lesion_size if lesion_size > 0 else torch.tensor(0.0)
 
     return {"tp": tp_norm.item(), "fp": fp_norm.item(), "fn": fn_norm.item()}
 
