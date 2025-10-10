@@ -219,7 +219,7 @@ def main(args):
             "--ckpt_path", ckpt_path,
             "--model_name", f"{args.model_prefix}-{k + 1}-fold",
             "--subvolume_dim", str(args.subvolume_dim),
-            "--slices_per_scan", str(args.slices_per_scan),
+            "--scores_dir", "./cross_scores",
             "--scores_file", "cross_scores.csv",
             "--per_size_scores_file", "per_size_cross_scores.csv",
         ]

@@ -77,7 +77,8 @@ class MRIDataset(IterableDataset):
                     raise ValueError(f"`overlap` must be within the range [0, 1]: {o}")
 
         # TODO: remove when X, Y dimensions will be supported for patch/subvolume extraction
-        overlap = (overlap[-3], 1.0, 1.0)
+        if overlap is not None:
+            overlap = (overlap[-3], 1.0, 1.0)
 
         self.scans = scans
         self.masks = masks
@@ -106,7 +107,7 @@ class MRIDataset(IterableDataset):
 
         self.subvolumes_num = 1
 
-        if self.overlap is not None:
+        if self.overlap is not None and self.subvolume_dim is not None:
             patch_D = round_half_up(self.subvolume_dim * overlap[-3]) if overlap is not None else self.subvolume_dim
             self.subvolumes_num = round_half_up(scan_dim[-3] / patch_D)
 

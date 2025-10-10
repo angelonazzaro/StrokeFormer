@@ -3,13 +3,13 @@ import random
 from functools import partial
 from typing import Optional, Tuple, List, Union, Literal
 
+import einops
 import matplotlib.pyplot as plt
 import monai.metrics.metric
 import nibabel as nib
 import numpy as np
 import torch
 from monai.metrics import DiceMetric, MeanIoU, HausdorffDistanceMetric
-from pytorch_grad_cam.utils.image import show_cam_on_image
 from scipy.ndimage import label
 from torchmetrics.functional import accuracy, recall, f1_score, auroc, precision
 from torchvision.transforms.v2.functional import to_pil_image
@@ -96,30 +96,8 @@ def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, re
     return None
 
 
-class SegmentationModelOutputWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super(SegmentationModelOutputWrapper, self).__init__()
-        self.model = model
-
-    def forward(self, x):
-        return self.model(x)
-
-
-class SemanticSegmentationTarget:
-    def __init__(self, mask):
-        if isinstance(mask, torch.Tensor):
-            self.mask = mask
-        else:
-            self.mask = torch.from_numpy(mask)
-
-        if torch.cuda.is_available():
-            self.mask = self.mask.cuda()
-
-    def __call__(self, model_output):
-        return (model_output * self.mask).sum()
-
-
-def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: dict[partial], prefix: Optional[Literal['train', 'val', 'test']] = None):
+def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: dict[partial],
+                    prefix: Optional[Literal['train', 'val', 'test']] = None):
     scores = {}
     prefix = f"{prefix}_" if prefix is not None else ""
 
@@ -159,16 +137,29 @@ def reset_metrics(metrics):
         if isinstance(metric_fn, monai.metrics.metric.Cumulative):
             metric_fn.reset()
 
-def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None, cam_model=None):
+
+def generate_overlayed_slice(slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False):
+    if slice.min() < 0 or slice.max() > 1:
+        # normalize scan as RGB conversion requires [0,1] range
+        slice = (slice - slice.min()) / (slice.max() - slice.min())
+
+    slice = np.asarray(to_pil_image(slice).convert("RGB"))
+    mask_slice = np.asarray(to_pil_image(mask_slice).convert("RGB"))
+
+    overlay = overlay_img(slice, mask_slice, color=color)
+
+    if return_tensor:
+        overlay = torch.from_numpy(overlay)
+        overlay = einops.rearrange(overlay, "h w c -> c h w")
+        return overlay
+    return overlay
+
+
+def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None):
     with torch.no_grad():
         preds = model(scans, return_preds=True)
 
     preds = (preds >= 0.5).float()
-    grayscale_cam = torch.zeros_like(preds[0])
-
-    if cam_model is not None:
-        grayscale_cam = cam_model(scans, [SemanticSegmentationTarget(mask) for mask in masks],
-                                  eigen_smooth=False)  # noqa
 
     # randomly sample slices_per_scan
     if slices_per_scan is not None and slices_per_scan < scans.shape[-3]:
@@ -176,7 +167,6 @@ def predictions_generator(model, scans, masks, metrics: dict[partial], slices_pe
         masks = masks[:, :, random_slices]
         scans = scans[:, :, random_slices]
         preds = preds[:, :, random_slices]
-        grayscale_cam = grayscale_cam[:, random_slices]
 
     for i in range(scans.shape[0]):
         for slice_idx in range(scans[i].shape[-3]):
@@ -208,10 +198,6 @@ def predictions_generator(model, scans, masks, metrics: dict[partial], slices_pe
                 "pd": pd,
                 "scores": scores,
             }
-
-            if cam_model is not None:
-                cam_image = show_cam_on_image(scan_slice / 255, grayscale_cam[i, slice_idx], use_rgb=True)
-                results["cam_image"] = cam_image
 
             yield results
 
@@ -364,11 +350,12 @@ def extract_patches(scan: Union[torch.Tensor, np.ndarray],
     origins = []
     patch_D, patch_H, patch_W = check_patch_dim(patch_dim, scan.shape)
 
-    if isinstance(overlap, float):
-        overlap = (overlap, overlap, overlap)
-    else:
-        tmp = [ov if ov is not None else 1.0 for ov in overlap]
-        overlap = tuple(tmp)
+    if overlap is not None:
+        if isinstance(overlap, float):
+            overlap = (overlap, overlap, overlap)
+        else:
+            tmp = [ov if ov is not None else 1.0 for ov in overlap]
+            overlap = tuple(tmp)
 
     stride_D = round_half_up(patch_D * overlap[-3]) if overlap is not None else patch_D
     stride_H = round_half_up(patch_H * overlap[-2]) if overlap is not None else patch_H

@@ -5,7 +5,8 @@ torchvision==0.23.0+cpu
 torchmetrics==1.8.2
 lightning==2.5.5
 jsonargparse[signatures]==4.41.0
-numpy==2.3.3
+scipy==1.16.2
+numpy==2.3.0
 pandas==2.3.3
 grad-cam==1.5.5
 matplotlib==3.10.6
@@ -14,6 +15,5 @@ monai==1.5.1
 wandb==0.22.1
 tqdm==4.67.1
 einops==0.8.1
-scipy==1.16.2
 SimpleITK==2.5.2
 seaborn==0.13.2
