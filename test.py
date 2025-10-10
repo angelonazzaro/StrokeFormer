@@ -15,7 +15,7 @@ from tqdm import tqdm
 from constants import LESION_SIZES
 from dataset import MRIDataModule
 from model import StrokeFormer
-from utils import generate_overlayed_slice, get_lesion_size_category, build_metrics, compute_metrics
+from utils import generate_overlayed_slice, get_lesion_size_category, build_metrics, compute_metrics, slice_wise_fp_fn
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -155,11 +155,20 @@ def test(args):
 
                 # compute per size metrics
                 lesion_size = get_lesion_size_category(mask_slice)
-                scores = compute_metrics(scan_slice, pred_slice, metrics_fns)
+                scores = compute_metrics(pred_slice, mask_slice, metrics_fns)
 
                 for metric_name, value in scores.items():
                     per_size_scores[lesion_size][metric_name].append(value)
-                    global_metrics[metric_name].append(value)
+                    # exclude from global metrics as free-lesion slices are in majority and could push
+                    # the overall scores much higher than they actually are
+                    if lesion_size != 'No Lesion':
+                        global_metrics[metric_name].append(value)
+
+                tp_fp_dict = slice_wise_fp_fn(pred_slice, mask_slice)
+                for key, value in tp_fp_dict.items():
+                    per_size_scores[lesion_size][key].append(value)
+                    if lesion_size != 'No Lesion':
+                        global_metrics[key].append(value)
 
                 if args.n_predictions > predictions_until_now:
                     grid = make_grid([gt, pd], nrow=2)

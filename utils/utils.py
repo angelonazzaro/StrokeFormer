@@ -225,43 +225,50 @@ def get_lesion_size_category(mask: Union[torch.Tensor, np.ndarray], return_all: 
     return size_category
 
 
-def lesion_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray], target: Union[torch.Tensor, np.ndarray]):
+def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
+                     target: Union[torch.Tensor, np.ndarray]):
     """
-    Computes lesion-wise false positives and false negatives.
+    Compute normalized true positives, false positives and false negatives for a single brain slice.
 
     Args:
-        prediction: Ground truth binary mask (C x D x H x W)
-        target: Predicted binary mask (C x D H x W)
-
+        prediction: 2D binary mask (H, W)
+        target: 2D binary ground truth mask (H, W)
     Returns:
-        dict with lesion-wise TP, FP, FN counts and derived rates
+        dict with normalized 'tp', 'fp', 'fn'
     """
-    # Label connected components
-    gt_labeled, gt_count = label(target, structure=np.ones((3,) * target.ndim))
-    pred_labeled, pred_count = label(prediction, structure=np.ones((3,) * target.ndim))
+    if isinstance(prediction, np.ndarray):
+        prediction = torch.from_numpy(prediction)
+    if isinstance(target, np.ndarray):
+        target = torch.from_numpy(target)
 
-    tp = 0
-    matched_gt = set()
+    assert prediction.shape == target.shape and prediction.ndim == 2, \
+        "Prediction and target must have 2D shape of equal dimensions (single slice)."
 
-    for pred_id in range(1, pred_count + 1):
-        pred_component = (pred_labeled == pred_id)
-        overlap_ids = np.unique(gt_labeled[pred_component])
-        overlap_ids = overlap_ids[overlap_ids != 0]
+    # ensure binary masks
+    prediction = (prediction > 0.5).int()
+    target = (target > 0.5).int()
 
-        if len(overlap_ids) > 0:
-            tp += 1
-            matched_gt.update(overlap_ids)
+    prediction_flat = prediction.flatten()
+    target_flat = target.flatten()
 
-    fn = gt_count - len(matched_gt)
-    fp = pred_count - tp
+    total_voxels = target_flat.numel()
+    lesion_size = target_flat.sum()
 
-    return {
-        "lesion_TP": tp,
-        "lesion_FP": fp,
-        "lesion_FN": fn,
-        "lesion_sensitivity": tp / (tp + fn + 1e-8),
-        "lesion_precision": tp / (tp + fp + 1e-8),
-    }
+    tp = (prediction_flat * target_flat).sum()
+    fp = (prediction_flat * (1 - target_flat)).sum()
+    fn = ((1 - prediction_flat) * target_flat).sum()
+
+    fp_norm = fp.float() / total_voxels
+
+    # no positives in GT
+    if lesion_size == 0:
+        return {"tp": torch.tensor(0.0).item(), "fp": fp_norm.item(), "fn": torch.tensor(0.0)}
+
+    tp_norm = tp.float() / lesion_size
+
+    fn_norm = fn.float() / total_voxels
+
+    return {"tp": tp_norm.item(), "fp": fp_norm.item(), "fn": fn_norm.item()}
 
 
 def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted", "none"] = "micro"):
