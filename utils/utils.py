@@ -5,11 +5,10 @@ from typing import Optional, Tuple, List, Union, Literal
 
 import einops
 import matplotlib.pyplot as plt
-import monai.metrics.metric
 import nibabel as nib
 import numpy as np
 import torch
-from monai.metrics import DiceMetric, MeanIoU, HausdorffDistanceMetric
+from monai.metrics import compute_dice, compute_iou
 from scipy.ndimage import label
 from torchmetrics.functional import accuracy, recall, f1_score, auroc, precision
 from torchvision.transforms.v2.functional import to_pil_image
@@ -102,40 +101,70 @@ def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: d
     prefix = f"{prefix}_" if prefix is not None else ""
 
     for name, metric_fn in metrics.items():
-        is_cumulative = isinstance(metric_fn, monai.metrics.metric.Cumulative)
-
-        if is_cumulative:
-            # Hausdorff distance needs at least 4D: (B, C, H, W)
-            # other MONAI metrics need at least 3D: (C, H, W)
-            min_dim = 4 if name == "hausdorff_distance" else 3
-            if predictions.ndim < min_dim:
-                # prepend singleton dimensions to reach required rank
-                pad_dims = (min_dim - predictions.ndim)
-                new_shape = (1,) * pad_dims + tuple(predictions.shape)
-                preds = predictions.view(new_shape)
-                targs = targets.view(new_shape)
-            else:
-                preds, targs = predictions, targets
-
-            metric_fn(preds, targs)
-            raw_score = metric_fn.aggregate().mean()
+        if name == "auroc":
+            targs = targets.long()
         else:
-            if name == "auroc":
-                targs = targets.long()
-            else:
-                targs = targets
+            targs = targets
 
+        if name in ['dice', 'iou']:
+            raw_score = metric_fn(predictions, targs)
+            raw_score = torch.nan_to_num(raw_score, nan=0.0).mean()
+        else:
             raw_score = metric_fn(predictions, targs)
 
-        scores[f"{prefix}{name}"] = float(raw_score)
+        scores[f"{prefix}{name}"] = raw_score.item()
 
     return scores
 
 
-def reset_metrics(metrics):
-    for name, metric_fn in metrics.items():
-        if isinstance(metric_fn, monai.metrics.metric.Cumulative):
-            metric_fn.reset()
+def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted", "none"] = "micro"):
+    task = "binary" if num_classes <= 2 else "multiclass"
+    return {
+        "accuracy": partial(
+            accuracy,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None
+        ),
+        "precision": partial(
+            precision,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None
+        ),
+        "recall": partial(
+            recall,
+            task=task,
+            num_classes=num_classes,
+            ignore_index=None,
+            average=average
+        ),
+        "f1": partial(
+            f1_score,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None
+        ),
+        "auroc": partial(
+            auroc,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None
+        ),
+        "iou": partial(
+            compute_iou,
+            ignore_empty=False,
+        ),
+        "dice": partial(
+            compute_dice,
+            num_classes=num_classes,
+            ignore_empty=False,
+        ),
+    }
 
 
 def generate_overlayed_slice(slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False):
@@ -269,54 +298,6 @@ def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
     fn_norm = fn.float() / total_voxels
 
     return {"tp": tp_norm.item(), "fp": fp_norm.item(), "fn": fn_norm.item()}
-
-
-def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted", "none"] = "micro"):
-    task = "binary" if num_classes <= 2 else "multiclass"
-    return {
-        "accuracy": partial(
-            accuracy,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None
-        ),
-        "precision": partial(
-            precision,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None
-        ),
-        "recall": partial(
-            recall,
-            task=task,
-            num_classes=num_classes,
-            ignore_index=None,
-            average=average
-        ),
-        "f1": partial(
-            f1_score,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None
-        ),
-        "auroc": partial(
-            auroc,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None
-        ),
-        "iou": MeanIoU(get_not_nans=False),
-        "dice": DiceMetric(num_classes=num_classes, get_not_nans=False),
-        "hausdorff_distance": HausdorffDistanceMetric(
-            get_not_nans=False,
-            percentile=95,
-            distance_metric='euclidean',
-        )
-    }
 
 
 def overlay_img(scan: np.ndarray, mask: np.ndarray, color: tuple[int, int, int] = (255, 0, 0), alpha: float = 0.5):
