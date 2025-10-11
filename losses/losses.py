@@ -43,7 +43,7 @@ class SegmentationLoss(nn.Module):
                  segmentation_loss_config: dict = {},
                  prediction_loss: str = "BCEWithLogitsLoss",
                  prediction_loss_config: dict = {},
-                 weights: Tuple[float, float] = (0.5, 0.5),
+                 loss_weights: Tuple[float, float] = (0.5, 0.5),
                  reduction: Literal["mean", "sum", "none"] = "mean"):
         super().__init__()
 
@@ -53,7 +53,7 @@ class SegmentationLoss(nn.Module):
 
         self.segmentation_loss = instantiate_loss(segmentation_loss, segmentation_loss_config)
         self.prediction_loss = instantiate_loss(prediction_loss, prediction_loss_config)
-        self.weights = weights
+        self.loss_weights = loss_weights
         self.reduction = reduction
 
     def forward(
@@ -92,7 +92,7 @@ class SegmentationLoss(nn.Module):
         cls_loss = cls_loss_total / len(targets)
         seg_loss = seg_loss_total / max(seg_loss_count, 1)
 
-        total_loss = self.weights[0] * seg_loss + self.weights[1] * cls_loss
+        total_loss = self.loss_weights[0] * seg_loss + self.loss_weights[1] * cls_loss
 
         prefix = f"{prefix}_" if prefix is not None else ""
 

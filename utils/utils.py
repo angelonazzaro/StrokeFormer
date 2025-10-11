@@ -17,6 +17,12 @@ from tqdm import tqdm
 from constants import LESION_SIZES
 
 
+def plot_fold_distribution(fold_masks_paths, title):
+    fold_metadata = get_lesion_distribution_metadata(fold_masks_paths)
+    counts = [fold_metadata[size]["count"] for size in LESION_SIZES]
+    plot_lesion_size_distribution(counts, LESION_SIZES, title=title)
+
+
 def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[str] = LESION_SIZES,
                                      return_masks: bool = False):
     metadata = {

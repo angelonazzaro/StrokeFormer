@@ -15,7 +15,7 @@ class StrokeFormer(LightningModule):
                  segmentation_loss_config: dict = {},
                  prediction_loss: str = "BCEWithLogitsLoss",
                  prediction_loss_config: dict = {},
-                 weights: Tuple[float, float] = (0.5, 0.5),
+                 loss_weights: Tuple[float, float] = (0.5, 0.5),
                  reduction: Literal["mean", "sum", "none"] = "mean",
                  num_classes: int = 1,
                  in_channels: int = 1,
@@ -31,7 +31,7 @@ class StrokeFormer(LightningModule):
         self.loss = SegmentationLoss(segmentation_loss=segmentation_loss,
                                      segmentation_loss_config=segmentation_loss_config,
                                      prediction_loss=prediction_loss, prediction_loss_config=prediction_loss_config,
-                                     weights=weights, reduction=reduction)
+                                     loss_weights=loss_weights, reduction=reduction)
 
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
 

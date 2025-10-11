@@ -16,7 +16,7 @@ from callbacks import LogPredictionCallback
 from constants import LESION_SIZES
 from dataset import MRIDataModule
 from model import StrokeFormer
-from utils import get_lesion_distribution_metadata, plot_lesion_size_distribution, round_half_up
+from utils import get_lesion_distribution_metadata, plot_lesion_size_distribution, round_half_up, plot_fold_distribution
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,11 +95,6 @@ def main(args):
     n_test_folds = round_half_up(len(folds) * args.splits[2] / 100)
     logger.info(f"Fold distribution — Train: {args.splits[0]}%, Val: {args.splits[1]}%, Test: {args.splits[2]}%")
 
-    def _plot_fold_distribution(fold_masks_paths, title):
-        fold_metadata = get_lesion_distribution_metadata(fold_masks_paths)
-        counts = [fold_metadata[size]["count"] for size in LESION_SIZES]
-        plot_lesion_size_distribution(counts, LESION_SIZES, title=title)
-
     for k in range(args.k):
         logger.info("-" * 80)
         logger.info(f"[Fold {k + 1}/{args.k}] Starting training and evaluation")
@@ -116,10 +111,11 @@ def main(args):
         val_masks_paths = list(volume_dist.loc[val_folds].filepath)
         test_masks_paths = list(volume_dist.loc[test_folds].filepath)
 
-        # plot size distribution per set to make sure cross validation created folds of distribution equal to that of the dataset's
-        _plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
-        _plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
-        _plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
+        # plot size distribution per set to make sure cross validation created folds of distribution equal
+        # to that of the dataset's
+        plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
+        plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
+        plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
 
         def _make_paths(filepaths):
             masks = [fp for fp in filepaths]
@@ -151,7 +147,7 @@ def main(args):
             segmentation_loss_config=segmentation_loss_config,
             prediction_loss=args.prediction_loss,
             prediction_loss_config=prediction_loss_config,
-            weights=args.weights,
+            loss_weights=args.loss_weights,
             num_classes=args.num_classes,
             in_channels=args.in_channels,
             betas=args.betas,
@@ -268,7 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--segmentation_loss_config", type=str, default="{}")
     parser.add_argument("--prediction_loss", type=str, default="BCEWithLogitsLoss")
     parser.add_argument("--prediction_loss_config", type=str, default="{}")
-    parser.add_argument("--weights", nargs=2, type=float, default=(0.5, 0.5))
+    parser.add_argument("--loss_weights", nargs=2, type=float, default=(0.5, 0.5))
 
     # training
     parser.add_argument("--default_root_dir", type=str, default="StrokeFormer")
