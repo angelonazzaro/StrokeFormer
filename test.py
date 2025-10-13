@@ -150,7 +150,7 @@ def test(args):
 
                 # compute per size metrics
                 lesion_size = get_lesion_size_category(mask_slice)
-                scores = compute_metrics(pred_slice, mask_slice, metrics_fns)
+                scores = compute_metrics(pred_slice, mask_slice, metrics_fns, lesions_only=False)
                 tp_fp_dict = slice_wise_fp_fn(pred_slice, mask_slice)
                 scores = {**scores, **tp_fp_dict}
 

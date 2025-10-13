@@ -8,12 +8,13 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import torch
-from monai.metrics import compute_dice, compute_iou
+from monai.metrics import compute_iou
 from scipy.ndimage import label
 from torchmetrics.functional import accuracy, recall, f1_score, auroc, precision
 from torchvision.transforms.v2.functional import to_pil_image
 from tqdm import tqdm
 
+from losses import dice_score
 from constants import LESION_SIZES
 
 
@@ -102,23 +103,29 @@ def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, re
 
 
 def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: dict[partial],
+                    lesions_only: bool = True,
                     prefix: Optional[Literal['train', 'val', 'test']] = None):
-    scores = {}
+    assert 3 <= predictions.ndim <= 5, ("predictions and targets must have shape (B, H, W), (B, D, H, W) or "
+                                        "(B, C, D, H, W)")
+    assert predictions.shape == targets.shape, "predictions and targets must have same shape"
     prefix = f"{prefix}_" if prefix is not None else ""
+    scores = {f"{prefix}{m}": 0.0 for m in metrics.keys()}
 
-    for name, metric_fn in metrics.items():
-        if name == "auroc":
-            targs = targets.long()
-        else:
-            targs = targets
+    for p, t in zip(predictions, targets):
+        if lesions_only and t.sum() == 0:
+            continue
 
-        if name in ['dice', 'iou']:
-            raw_score = metric_fn(predictions, targs)
-            raw_score = torch.nan_to_num(raw_score, nan=0.0).mean()
-        else:
-            raw_score = metric_fn(predictions, targs)
+        for name, metric_fn in metrics.items():
+            if name == 'iou':
+                raw_score = metric_fn(p, t)
+                raw_score = torch.nan_to_num(raw_score, nan=0.0).mean()
+            else:
+                raw_score = metric_fn(p, t)
 
-        scores[f"{prefix}{name}"] = raw_score.item()
+            if isinstance(raw_score, torch.Tensor):
+                raw_score = raw_score.item()
+
+            scores[f"{prefix}{name}"] = raw_score
 
     return scores
 
@@ -154,26 +161,18 @@ def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted
             average=average,
             ignore_index=None
         ),
-        "auroc": partial(
-            auroc,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None
-        ),
         "iou": partial(
             compute_iou,
             ignore_empty=False,
         ),
         "dice": partial(
-            compute_dice,
-            num_classes=num_classes,
-            ignore_empty=False,
+            dice_score,
         ),
     }
 
 
-def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False, return_rgbs: bool = False):
+def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False,
+                             return_rgbs: bool = False):
     if scan_slice.min() < 0 or scan_slice.max() > 1:
         # normalize scan as RGB conversion requires [0,1] range
         scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
@@ -192,7 +191,7 @@ def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_t
     return overlay
 
 
-def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None):
+def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None, lesions_only: bool = True):
     with torch.no_grad():
         preds = model(scans, return_preds=True)
 
@@ -213,7 +212,7 @@ def predictions_generator(model, scans, masks, metrics: dict[partial], slices_pe
 
             lesion_size = get_lesion_size_category(mask_slice)
 
-            scores = compute_metrics(predicted_slice, mask_slice, metrics)
+            scores = compute_metrics(predicted_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics, lesions_only=lesions_only)
 
             # normalize scan as RGB conversion requires [0,1] range
             scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())

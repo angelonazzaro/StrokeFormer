@@ -27,17 +27,17 @@ parameters:
   model.loss_weights:
     values:
       - [0.5, 0.5]
-      - [0.25, 0.75]
       - [0.75, 0.25]
+      - [0.9, 0.1]
       - [1.0, 0.0]
   data.paths:
     value:
       train:
-        scans: "data/ATLAS_2/Processed/Scans"
-        masks: "data/ATLAS_2/Processed/Masks"
+        scans: "data/ATLAS_2/Processed/Splits/Train/Scans"
+        masks: "data/ATLAS_2/Processed/Splits/Train/Masks"
       val:
-        scans: "data/ATLAS_2/Processed/Scans"
-        masks: "data/ATLAS_2/Processed/Masks"
+        scans: "data/ATLAS_2/Processed/Splits/Val/Scans"
+        masks: "data/ATLAS_2/Processed/Splits/Val/Masks"
   data.batch_size:
     value: 8
   trainer.max_epochs:
@@ -49,7 +49,9 @@ early_terminate:
   max_iter: 10
 
 command:
+  - python
   - ${program}
   - fit
-  - -c
+  - --config
+  - config.yaml
   - ${args}

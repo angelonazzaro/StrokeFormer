@@ -83,7 +83,7 @@ trainer:
       save_on_train_epoch_end: true
       enable_version_counter: true
   fast_dev_run: false
-  max_epochs: 250
+  max_epochs: 150
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -113,16 +113,17 @@ trainer:
   plugins: null
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: strokeformer
+  default_root_dir: StrokeFormer
   model_registry: null
 model:
-  segmentation_loss: DiceLoss
-  segmentation_loss_config: {}
+  segmentation_loss: BinaryDiceLoss
+  segmentation_loss_config:
+    apply_sigmoid: true
   prediction_loss: BCEWithLogitsLoss
   prediction_loss_config: {}
-  weights:
-  - 0.5
-  - 0.5
+  loss_weights:
+  - 1.0
+  - 0.0
   reduction: mean
   num_classes: 1
   in_channels: 1
@@ -130,19 +131,19 @@ model:
   - 0.9
   - 0.999
   eps: 1.0e-08
-  lr: 0.0004
-  init_lr: 4.0e-06
-  warmup_steps: 10
+  lr: 0.0007269838191425377
+  init_lr: 2.347164135902171e-06
+  warmup_steps: 5
   lr_scheduler_interval: epoch
-  weight_decay: 0.001
+  weight_decay: 0.0002231269917402357
 data:
   paths:
     train:
-      scans: data/ATLAS_2/Processed/Scans
       masks: data/ATLAS_2/Processed/Masks
+      scans: data/ATLAS_2/Processed/Scans
     val:
-      scans: data/ATLAS_2/Processed/Scans
       masks: data/ATLAS_2/Processed/Masks
+      scans: data/ATLAS_2/Processed/Scans
   ext: .npy
   scan_dim:
   - 1
@@ -156,7 +157,7 @@ data:
   - 128
   transforms: null
   augment: false
-  batch_size: 8
+  batch_size: 1
   num_workers: 0
 optimizer: null
 lr_scheduler: null
