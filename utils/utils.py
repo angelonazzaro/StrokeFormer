@@ -110,6 +110,7 @@ def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: d
     assert predictions.shape == targets.shape, "predictions and targets must have same shape"
     prefix = f"{prefix}_" if prefix is not None else ""
     scores = {f"{prefix}{m}": 0.0 for m in metrics.keys()}
+    num_of_volumes_containing_lesions = 0
 
     for p, t in zip(predictions, targets):
         if lesions_only and t.sum() == 0:
@@ -125,7 +126,10 @@ def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: d
             if isinstance(raw_score, torch.Tensor):
                 raw_score = raw_score.item()
 
-            scores[f"{prefix}{name}"] = raw_score
+            scores[f"{prefix}{name}"] += raw_score
+        num_of_volumes_containing_lesions += 1
+
+    scores = {m: s / max(num_of_volumes_containing_lesions, 1) for m, s in scores.items()}
 
     return scores
 
