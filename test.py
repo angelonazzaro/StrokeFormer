@@ -150,7 +150,7 @@ def test(args):
 
                 # compute per size metrics
                 lesion_size = get_lesion_size_category(mask_slice)
-                scores = compute_metrics(pred_slice, mask_slice, metrics_fns, lesions_only=False)
+                scores = compute_metrics(pred_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics_fns, lesions_only=False)
                 tp_fp_dict = slice_wise_fp_fn(pred_slice, mask_slice)
                 scores = {**scores, **tp_fp_dict}
 
@@ -174,7 +174,7 @@ def test(args):
                         images.append(cam_overlay)
                         del cam_overlay
 
-                    grid = make_grid(images, nrow=len(images))
+                    grid = make_grid(images, padding=4, pad_value=255, nrow=len(images))
                     to_pil_image(grid).save(os.path.join(pred_dir, f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png"))  # noqa
                     del grid
 
