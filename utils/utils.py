@@ -70,8 +70,8 @@ def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[st
             "filepaths": []
         }
 
-    masks = [nib.load(filepath).get_fdata() if filepath.endswith(".nii.gz") else np.load(filepath) for filepath in
-             tqdm(masks_filepaths, desc="Loading masks")]
+    masks = [nib.load(filepath).get_fdata().astype(np.uint8) if filepath.endswith(".nii.gz") \
+             else np.load(filepath).astype(np.uint8) for filepath in tqdm(masks_filepaths, desc="Loading masks")]
 
     for i, mask in tqdm(enumerate(masks), desc="Getting lesion distribution metadata"):
         tot_voxels = mask.size
@@ -85,14 +85,14 @@ def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[st
 
         lesions_per_patient = 0
         for slice_idx in range(mask.shape[-1]):
-            slice_mask = mask[..., slice_idx]
+            slice_mask = mask[0, ..., slice_idx]
             category, lesion_voxels, lesion_area = get_lesion_size_category(slice_mask, return_all=True)
             metadata["lesion_voxels"] += lesion_voxels
             metadata[category]["lesion_area"].append(lesion_area)
             metadata[category]["count"] += 1
             metadata[category]["filepaths"].append((masks_filepaths[i], slice_idx))
 
-            _, thresh = cv2.threshold(slice_mask, 0, 255, cv2.THRESH_BINARY)
+            _, thresh = cv2.threshold(slice_mask, 0, 1, cv2.THRESH_BINARY)
             totalLabels, _, _, _ = cv2.connectedComponentsWithStats(thresh, 4, cv2.CV_32S)
 
             lesions_per_patient += totalLabels - 1  # exclude background region
