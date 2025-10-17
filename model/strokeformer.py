@@ -56,7 +56,7 @@ class StrokeFormer(LightningModule):
     def forward(self, x: torch.Tensor, return_preds: bool = False) -> Union[
         torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
 
-        logits = self.model(x)
+        logits = self.model(x) # [B, N, D, H, W]
 
         if return_preds:
             if self.num_classes > 2:

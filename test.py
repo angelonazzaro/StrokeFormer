@@ -146,9 +146,13 @@ def test(args):
                 os.makedirs(pred_dir, exist_ok=True)
 
             for slice_idx in range(preds.shape[-3]):
-                scan_slice = scans[i][0, slice_idx]
-                mask_slice = masks[i][0, slice_idx]
-                pred_slice = preds[i][0, slice_idx]
+                scan_slice = scans[i][0, slice_idx] # [B, C, D, H, W]
+                mask_slice = masks[i][:, slice_idx] # [B, N, D, H, W] -> [N, H, W]
+                pred_slice = preds[i][:, slice_idx] # [B, N, D, H, W] -> [N, H, W]
+
+                # one-hot to 2D
+                mask_slice = torch.argmax(mask_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
+                pred_slice = torch.argmax(pred_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
 
                 gt, scan_slice, _ = generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor=True, return_rgbs=True)
                 pd = generate_overlayed_slice(scan_slice, pred_slice, color=(255, 0, 0), return_tensor=True)

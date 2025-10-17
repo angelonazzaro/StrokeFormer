@@ -148,10 +148,14 @@ class MRIDataModule(LightningDataModule):
                                   size=(self.resize_to[0], self.resize_to[1]),
                                   align_corners=False,
                                   mode="bilinear",
-                                  antialias=True).long().to(dtype=scans.dtype)
+                                  antialias=True).long()
 
             # restore original shape of (B, C, D, resize_h, resize_w)
             scans = scans.view(B, C, D, self.resize_to[0], self.resize_to[1])
             masks = masks.view(B, C, D, self.resize_to[0], self.resize_to[1])
+
+        masks_dtype = masks.dtype
+        masks = torch.nn.functional.one_hot(masks.long().squeeze())  # [B, D, H, W, N]
+        masks = masks.permute(0, -1, -4, -3, -2).to(dtype=masks_dtype)  # [B, D, H, W, N] -> [B, N, D, H, W]
 
         return scans, masks
