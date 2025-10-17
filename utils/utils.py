@@ -18,6 +18,34 @@ from losses import dice_score
 from constants import LESION_SIZES
 
 
+def plot_mri_slices(mri_volume, figsize=(14, 14)):
+    # remove channel dimension if present
+    if mri_volume.ndim == 4 and mri_volume.shape[0] == 1:
+        mri_volume = mri_volume[0]
+    elif mri_volume.ndim != 3:
+        raise ValueError("Input MRI must have shape (1, H, W, D) or (H, W, D).")
+
+    H, W, D = mri_volume.shape
+
+    # compute grid size
+    cols = int(math.ceil(math.sqrt(D)))
+    rows = int(math.ceil(D / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=figsize)
+    axes = axes.flatten()
+
+    for i in range(D):
+        axes[i].imshow(mri_volume[:, :, i], cmap='gray')
+        axes[i].axis('off')
+
+    # hide empty subplots
+    for j in range(D, len(axes)):
+        axes[j].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
 def plot_fold_distribution(fold_masks_paths, title):
     fold_metadata = get_lesion_distribution_metadata(fold_masks_paths)
     counts = [fold_metadata[size]["count"] for size in LESION_SIZES]
@@ -70,7 +98,7 @@ def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[st
     return metadata
 
 
-def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, return_distribution=False):
+def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, plot=True,return_distribution=False):
     assert len(counts) == len(labels), "counts and labels must have same length"
 
     items = zip(counts, labels)
@@ -89,13 +117,14 @@ def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, re
         distributions[labels[i]] = p
         plt.text(i, v + 7.5, f"{p:.2f}%", ha="center")
 
-    plt.ylabel("Slices Without Lesions")
-    plt.xlabel("Lesion Size Categories")
-    plt.xticks(rotation=45)
-    if title is None:
-        title = "Lesion Size Distribution Across Slices"
-    plt.title(title)
-    plt.show()
+    if plot:
+        plt.ylabel("Slices Without Lesions")
+        plt.xlabel("Lesion Size Categories")
+        plt.xticks(rotation=45)
+        if title is None:
+            title = "Lesion Size Distribution Across Slices"
+        plt.title(title)
+        plt.show()
 
     if return_distribution:
         return distributions

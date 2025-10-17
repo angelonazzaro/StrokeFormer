@@ -45,7 +45,7 @@ def main(args):
     metadata = get_lesion_distribution_metadata(masks_filepaths)
     counts_across_slices = [metadata[size]["count"] for size in LESION_SIZES]
 
-    size_distributions = plot_lesion_size_distribution(counts_across_slices, LESION_SIZES, return_distribution=True)
+    size_distributions = plot_lesion_size_distribution(counts_across_slices, LESION_SIZES, plot=args.plot_distributions, return_distribution=True)
 
     dataframe_data = [{"size": size, "filepath": fp[0]} for size in LESION_SIZES for fp in metadata[size]["filepaths"]]
     df = pd.DataFrame(dataframe_data)
@@ -113,9 +113,10 @@ def main(args):
 
         # plot size distribution per set to make sure cross validation created folds of distribution equal
         # to that of the dataset's
-        plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
-        plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
-        plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
+        if args.plot_distributions:
+            plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
+            plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
+            plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
 
         def _make_paths(filepaths):
             masks = [fp for fp in filepaths]
@@ -209,7 +210,7 @@ def main(args):
         cmd = [
             "python", "test.py",
             "--seed", str(args.seed),
-            "--batch_size", str(args.batch_size),
+            "--batch_size", str(1),
             "--scans", *test_paths["scans"],
             "--masks", *test_paths["masks"],
             "--ckpt_path", ckpt_path,
@@ -238,6 +239,9 @@ if __name__ == "__main__":
     parser.add_argument("--k", type=int, default=5, help="Number of folds")
     parser.add_argument("--splits", nargs=3, type=int, default=(60, 20, 20),
                         help="Percentage split (train, val, test)")
+    parser.add_argument("--plot_distributions", action="store_true", default=False,
+                        help="Whether to plot distributions or not. If True, plot will need to be manually close "
+                             "before the script can continue")
 
     # dataloader
     parser.add_argument("--scans_dir", type=str, required=True)
