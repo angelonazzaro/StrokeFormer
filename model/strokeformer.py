@@ -17,7 +17,7 @@ class StrokeFormer(LightningModule):
                  prediction_loss_config: dict = {},
                  loss_weights: Tuple[float, float] = (0.5, 0.5),
                  reduction: Literal["mean", "sum", "none"] = "mean",
-                 num_classes: int = 1,
+                 num_classes: int = 2,
                  in_channels: int = 1,
                  betas: tuple[float, float] = (0.9, 0.999),
                  eps: float = 1e-8,

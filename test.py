@@ -5,15 +5,17 @@ import logging
 import os
 from argparse import ArgumentParser
 from collections import defaultdict
+from functools import partial
 
 import einops
-import numpy as np
 import torch
 from monai.inferers import SlidingWindowInferer
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from torchvision.transforms.v2.functional import to_pil_image
 from torchvision.utils import make_grid
+from torchmetrics.functional import matthews_corrcoef as mcc
+from torchmetrics.segmentation.hausdorff_distance import hausdorff_distance
 from tqdm import tqdm
 
 from constants import LESION_SIZES
@@ -112,6 +114,9 @@ def test(args):
     )
 
     metrics_fns = build_metrics(num_classes=args.num_classes)
+    task = "multiclass" if args.num_classes > 2 else "binary"
+    metrics_fns['hausdorff_distance'] = partial(hausdorff_distance, num_classes=args.num_classes, input_format="index")
+    metrics_fns['mcc'] = partial(mcc, task=task, num_classes=args.num_classes, ignore_index=None)
 
     logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
 
@@ -236,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_layers", nargs="+", default=None)
 
     parser.add_argument("--n_predictions", help="Number of predictions to save", type=int, default=30)
-    parser.add_argument("--num_classes", type=int, default=1)
+    parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--scores_dir", type=str, default="./scores")
     parser.add_argument("--scores_file", type=str, default="scores.csv")
     parser.add_argument("--per_size_scores_file", type=str, default="per_size_scores.csv")

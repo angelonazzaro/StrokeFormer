@@ -257,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("--augment", action="store_true")
 
     # model
-    parser.add_argument("--num_classes", type=int, default=1)
+    parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--in_channels", type=int, default=1)
     parser.add_argument("--lr", type=float, default=4e-4)
     parser.add_argument("--init_lr", type=float, default=4e-6)

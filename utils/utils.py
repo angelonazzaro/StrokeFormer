@@ -3,19 +3,18 @@ import random
 from functools import partial
 from typing import Optional, Tuple, List, Union, Literal
 
+import cv2
 import einops
 import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 import torch
-from monai.metrics import compute_iou
-from scipy.ndimage import label
-from torchmetrics.functional import accuracy, recall, f1_score, auroc, precision
+from torchmetrics.functional import accuracy, recall, f1_score, precision, jaccard_index
 from torchvision.transforms.v2.functional import to_pil_image
 from tqdm import tqdm
 
-from losses import dice_score
 from constants import LESION_SIZES
+from losses import dice_score
 
 
 def plot_mri_slices(mri_volume, figsize=(14, 14)):
@@ -80,17 +79,25 @@ def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[st
         slices_with_lesions = mask.any(axis=(0, 1))
 
         metadata["patients_count"] += 1
-        metadata["lesions_per_patient"].append(label(mask)[-1])
         metadata["tot_voxels"] += tot_voxels
         metadata["slices_without_lesions"] += np.sum(~slices_with_lesions)
         metadata["slices_with_lesions"] += np.sum(slices_with_lesions)
 
+        lesions_per_patient = 0
         for slice_idx in range(mask.shape[-1]):
-            category, lesion_voxels, lesion_area = get_lesion_size_category(mask[..., slice_idx], return_all=True)
+            slice_mask = mask[..., slice_idx]
+            category, lesion_voxels, lesion_area = get_lesion_size_category(slice_mask, return_all=True)
             metadata["lesion_voxels"] += lesion_voxels
             metadata[category]["lesion_area"].append(lesion_area)
             metadata[category]["count"] += 1
             metadata[category]["filepaths"].append((masks_filepaths[i], slice_idx))
+
+            _, thresh = cv2.threshold(slice_mask, 0, 255, cv2.THRESH_BINARY)
+            totalLabels, _, _, _ = cv2.connectedComponentsWithStats(thresh, 4, cv2.CV_32S)
+
+            lesions_per_patient += totalLabels - 1  # exclude background region
+
+        metadata["lesions_per_patient"].append(lesions_per_patient)
 
     if return_masks:
         return metadata, masks
@@ -146,9 +153,12 @@ def compute_metrics(predictions: torch.Tensor, targets: torch.Tensor, metrics: d
             continue
 
         for name, metric_fn in metrics.items():
-            if name == 'iou':
-                raw_score = metric_fn(p, t)
-                raw_score = torch.nan_to_num(raw_score, nan=0.0).mean()
+            if name == 'hausdorff_distance':
+                p = p.long().unsqueeze(0)
+                t = t.long().unsqueeze(0)
+
+            if name == 'hausdorff_distance' and (len(p.unique()) == 1 or len(t.unique()) == 1):
+                raw_score = 0.0
             else:
                 raw_score = metric_fn(p, t)
 
@@ -195,8 +205,11 @@ def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted
             ignore_index=None
         ),
         "iou": partial(
-            compute_iou,
-            ignore_empty=False,
+            jaccard_index,
+            task=task,
+            num_classes=num_classes,
+            average=average,
+            ignore_index=None,
         ),
         "dice": partial(
             dice_score,
