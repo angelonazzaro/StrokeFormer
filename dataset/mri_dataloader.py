@@ -154,8 +154,7 @@ class MRIDataModule(LightningDataModule):
             scans = scans.view(B, C, D, self.resize_to[0], self.resize_to[1])
             masks = masks.view(B, C, D, self.resize_to[0], self.resize_to[1])
 
-        masks_dtype = masks.dtype
         masks = torch.nn.functional.one_hot(masks.long().squeeze())  # [B, D, H, W, N]
-        masks = masks.permute(0, -1, -4, -3, -2).to(dtype=masks_dtype)  # [B, D, H, W, N] -> [B, N, D, H, W]
+        masks = masks.permute(0, -1, -4, -3, -2).to(dtype=scans.dtype)  # [B, D, H, W, N] -> [B, N, D, H, W]
 
         return scans, masks
