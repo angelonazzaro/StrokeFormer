@@ -16,6 +16,7 @@ data/
 .idea
 .vscode
 .zed
+augmented_scans.json
 
 # Results
 scores

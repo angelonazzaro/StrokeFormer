@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cu128
 
-torch==2.8.0+cu128
-torchvision==0.23.0+cu128
+torch==2.8.0
+torchvision==0.23.0
 lightning==2.5.5
 torchmetrics==1.8.2
 jsonargparse[signatures]==4.41.0
@@ -18,3 +18,4 @@ tqdm==4.67.1
 einops==0.8.1
 SimpleITK==2.5.2
 seaborn==0.13.2
+pie-torch==0.0.1
