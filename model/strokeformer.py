@@ -1,22 +1,57 @@
-from typing import Literal, Union, Tuple
+from typing import Literal, Union, Tuple, Optional
 
+import monai.losses
 import torch
+import torch.nn as nn
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
-from losses import SegmentationLoss
+import losses
 from model.segformer3d import SegFormer3D
 from utils import build_metrics, compute_metrics
+
+_MODULES = [monai.losses, nn, losses]
+
+
+def check_loss_validity(loss: str):
+    loss_exists = True
+
+    for module in _MODULES:
+        loss_exists = getattr(module, loss, None) is not None
+        if loss_exists:
+            break
+
+    if not loss_exists:
+        raise AttributeError(
+            f"{loss} is not a valid loss function. It is not available in none of  the following modules: {_MODULES}")
+
+
+def instantiate_loss(loss: str, config: Optional[dict] = None):
+    check_loss_validity(loss)
+
+    loss_cls = None
+    for module in _MODULES:
+        loss_cls = getattr(module, loss, None)
+        if loss_cls is not None:
+            break
+
+    if config is None:
+        config = {}
+
+    for key in config.keys():
+        if "weight" in key and not isinstance(config[key], torch.Tensor):
+            config[key] = torch.tensor(config[key])
+
+    return loss_cls(**config)
 
 
 class StrokeFormer(LightningModule):
     def __init__(self,
                  segmentation_loss: str = "DiceLoss",
-                 segmentation_loss_config: dict = {},
+                 segmentation_loss_config: Optional[dict] = None,
                  prediction_loss: str = "BCEWithLogitsLoss",
-                 prediction_loss_config: dict = {},
+                 prediction_loss_config: Optional[dict] = None,
                  loss_weights: Tuple[float, float] = (0.5, 0.5),
-                 reduction: Literal["mean", "sum", "none"] = "mean",
                  num_classes: int = 2,
                  in_channels: int = 1,
                  betas: tuple[float, float] = (0.9, 0.999),
@@ -28,10 +63,9 @@ class StrokeFormer(LightningModule):
                  weight_decay: float = 1e-3):
         super().__init__()
 
-        self.loss = SegmentationLoss(segmentation_loss=segmentation_loss,
-                                     segmentation_loss_config=segmentation_loss_config,
-                                     prediction_loss=prediction_loss, prediction_loss_config=prediction_loss_config,
-                                     loss_weights=loss_weights, reduction=reduction)
+        self.segmentation_loss = instantiate_loss(segmentation_loss, segmentation_loss_config)
+        self.prediction_loss = instantiate_loss(prediction_loss, prediction_loss_config)
+        self.loss_weights = loss_weights
 
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
 
@@ -56,7 +90,7 @@ class StrokeFormer(LightningModule):
     def forward(self, x: torch.Tensor, return_preds: bool = False) -> Union[
         torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
 
-        logits = self.model(x) # [B, N, D, H, W]
+        logits = self.model(x)  # [B, N, D, H, W]
 
         if return_preds:
             if self.num_classes > 2:
@@ -72,22 +106,19 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        loss_dict = self.loss(logits, masks, prefix=prefix, return_dict=True)
+        seg_loss = self.segmentation_loss(logits, masks)
+        ce_loss = self.prediction_loss(logits, masks.to(dtype=logits.dtype))
 
-        if self.num_classes > 2:
-            predicted_masks = logits.softmax(dim=1)
-        else:
-            predicted_masks = logits.sigmoid()
+        loss = self.loss_weights[0] * seg_loss + self.loss_weights[1] * ce_loss
 
         log_dict = {
-            **loss_dict,
-            **compute_metrics(predicted_masks, masks, metrics=self.metrics, prefix=prefix),
+            f"{prefix}_loss": loss,
+            f"{self.segmentation_loss.__class__.__name__}": seg_loss,
+            f"{self.prediction_loss.__class__.__name__}": ce_loss,
+            **compute_metrics(logits, masks, metrics=self.metrics, prefix=prefix),
         }
 
-        loss = loss_dict[f'{prefix}_loss']
-
         self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
-        del loss_dict
 
         return loss
 

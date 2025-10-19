@@ -118,24 +118,24 @@ trainer:
 model:
   segmentation_loss: BinaryDiceLoss
   segmentation_loss_config:
-    apply_sigmoid: true
+    include_background: false
+    num_classes: 2
   prediction_loss: BCEWithLogitsLoss
-  prediction_loss_config: {}
+  prediction_loss_config: null
   loss_weights:
-  - 1.0
-  - 0.0
-  reduction: mean
-  num_classes: 1
+  - 0.5
+  - 0.5
+  num_classes: 2
   in_channels: 1
   betas:
   - 0.9
   - 0.999
   eps: 1.0e-08
-  lr: 0.0007269838191425377
-  init_lr: 2.347164135902171e-06
-  warmup_steps: 5
+  lr: 4.57367565084245e-05
+  init_lr: 1.7706510495673209e-06
+  warmup_steps: 48
   lr_scheduler_interval: epoch
-  weight_decay: 0.0002231269917402357
+  weight_decay: 0.0006726522399071583
 data:
   paths:
     train:
@@ -144,6 +144,7 @@ data:
     val:
       masks: data/ATLAS_2/Processed/Masks
       scans: data/ATLAS_2/Processed/Scans
+  num_classes: 2
   ext: .npy
   scan_dim:
   - 1

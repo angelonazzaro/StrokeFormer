@@ -1,11 +1,8 @@
-
-
 import csv
 import logging
 import os
 from argparse import ArgumentParser
 from collections import defaultdict
-from functools import partial
 
 import einops
 import torch
@@ -14,8 +11,6 @@ from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from torchvision.transforms.v2.functional import to_pil_image
 from torchvision.utils import make_grid
-from torchmetrics.functional import matthews_corrcoef as mcc
-from torchmetrics.segmentation.hausdorff_distance import hausdorff_distance
 from tqdm import tqdm
 
 from constants import LESION_SIZES
@@ -88,7 +83,8 @@ def test(args):
         paths={"test": {"scans": args.scans, "masks": args.masks}},
         batch_size=args.batch_size,
         overlap=None,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        num_classes=args.num_classes,
     )
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
@@ -114,9 +110,6 @@ def test(args):
     )
 
     metrics_fns = build_metrics(num_classes=args.num_classes)
-    task = "multiclass" if args.num_classes > 2 else "binary"
-    metrics_fns['hausdorff_distance'] = partial(hausdorff_distance, num_classes=args.num_classes, input_format="index")
-    metrics_fns['mcc'] = partial(mcc, task=task, num_classes=args.num_classes, ignore_index=None)
 
     logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
 
@@ -128,8 +121,6 @@ def test(args):
 
         with torch.no_grad():
             preds = inferer(scans, model)
-        preds = torch.sigmoid(preds)
-        preds = (preds > 0.5).float()
 
         grayscale_cam = torch.zeros_like(preds[0])
 
@@ -146,22 +137,27 @@ def test(args):
                 os.makedirs(pred_dir, exist_ok=True)
 
             for slice_idx in range(preds.shape[-3]):
-                scan_slice = scans[i][0, slice_idx] # [B, C, D, H, W]
-                mask_slice = masks[i][:, slice_idx] # [B, N, D, H, W] -> [N, H, W]
-                pred_slice = preds[i][:, slice_idx] # [B, N, D, H, W] -> [N, H, W]
+                scan_slice = scans[i][0, slice_idx]  # [B, C, D, H, W]
+                mask_slice = masks[i][:, slice_idx]  # [B, N, D, H, W] -> [N, H, W]
+                pred_slice = preds[i][:, slice_idx]  # [B, N, D, H, W] -> [N, H, W]
+
+                # compute per size metrics
+                lesion_size = get_lesion_size_category(mask_slice)
+
+                metrics_fns["dice"].keywords["include_background"] = lesion_size == 'No Lesion'
+
+                scores = compute_metrics(pred_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics_fns)
 
                 # one-hot to 2D
                 mask_slice = torch.argmax(mask_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
                 pred_slice = torch.argmax(pred_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
 
-                gt, scan_slice, _ = generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor=True, return_rgbs=True)
-                pd = generate_overlayed_slice(scan_slice, pred_slice, color=(255, 0, 0), return_tensor=True)
-
-                # compute per size metrics
-                lesion_size = get_lesion_size_category(mask_slice)
-                scores = compute_metrics(pred_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics_fns, lesions_only=False)
                 tp_fp_dict = slice_wise_fp_fn(pred_slice, mask_slice)
                 scores = {**scores, **tp_fp_dict}
+
+                gt, scan_slice, _ = generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0),
+                                                             return_tensor=True, return_rgbs=True)
+                pd = generate_overlayed_slice(scan_slice, pred_slice, color=(255, 0, 0), return_tensor=True)
 
                 for metric_name, value in scores.items():
                     per_size_scores[lesion_size][metric_name]["sum"] += value
@@ -176,9 +172,7 @@ def test(args):
                     images = [gt, pd]
 
                     if cam_model is not None:
-                        cam_overlay = torch.from_numpy(show_cam_on_image(scan_slice / 255,
-                                                                         grayscale_cam[i, slice_idx],
-                                                                         use_rgb=True))
+                        cam_overlay = torch.from_numpy(show_cam_on_image(scan_slice / 255, grayscale_cam[i, slice_idx], use_rgb=True))
                         cam_overlay = einops.rearrange(cam_overlay, "h w c -> c h w")
                         images.append(cam_overlay)
                         del cam_overlay

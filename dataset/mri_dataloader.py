@@ -52,6 +52,7 @@ def validate_paths_structure(paths):
 class MRIDataModule(LightningDataModule):
     def __init__(self,
                  paths: dict,
+                 num_classes: int,
                  ext: str = ".npy",
                  scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
                  subvolume_dim: Optional[int] = None,
@@ -79,6 +80,8 @@ class MRIDataModule(LightningDataModule):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+
+        self.num_classes = num_classes
 
         self.train_set, self.val_set, self.test_set = (None, None, None)
 
@@ -154,7 +157,7 @@ class MRIDataModule(LightningDataModule):
             scans = scans.view(B, C, D, self.resize_to[0], self.resize_to[1])
             masks = masks.view(B, C, D, self.resize_to[0], self.resize_to[1])
 
-        masks = torch.nn.functional.one_hot(masks.long().squeeze())  # [B, D, H, W, N]
-        masks = masks.permute(0, -1, -4, -3, -2).to(dtype=scans.dtype)  # [B, D, H, W, N] -> [B, N, D, H, W]
+        masks = torch.nn.functional.one_hot(masks.long().squeeze(1), num_classes=self.num_classes)  # [B, D, H, W, N]
+        masks = masks.permute(0, -1, -4, -3, -2)  # [B, D, H, W, N] -> [B, N, D, H, W]
 
         return scans, masks

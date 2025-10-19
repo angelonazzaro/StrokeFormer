@@ -136,6 +136,7 @@ def main(args):
             transforms=args.transforms,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
+            num_classes=args.num_classes,
         )
 
         logger.info("Instantiating model and callbacks...")
