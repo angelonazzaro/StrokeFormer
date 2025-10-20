@@ -1,5 +1,6 @@
 from typing import Literal, Union, Tuple, Optional
 
+from losses.losses import SegmentationLoss
 import monai.losses
 import torch
 import torch.nn as nn
@@ -10,47 +11,13 @@ import losses
 from model.segformer3d import SegFormer3D
 from utils import build_metrics, compute_metrics
 
-_MODULES = [monai.losses, nn, losses]
-
-
-def check_loss_validity(loss: str):
-    loss_exists = True
-
-    for module in _MODULES:
-        loss_exists = getattr(module, loss, None) is not None
-        if loss_exists:
-            break
-
-    if not loss_exists:
-        raise AttributeError(
-            f"{loss} is not a valid loss function. It is not available in none of  the following modules: {_MODULES}")
-
-
-def instantiate_loss(loss: str, config: Optional[dict] = None):
-    check_loss_validity(loss)
-
-    loss_cls = None
-    for module in _MODULES:
-        loss_cls = getattr(module, loss, None)
-        if loss_cls is not None:
-            break
-
-    if config is None:
-        config = {}
-
-    for key in config.keys():
-        if "weight" in key and not isinstance(config[key], torch.Tensor):
-            config[key] = torch.tensor(config[key])
-
-    return loss_cls(**config)
-
 
 class StrokeFormer(LightningModule):
     def __init__(self,
-                 segmentation_loss: str = "DiceLoss",
-                 segmentation_loss_config: Optional[dict] = None,
-                 prediction_loss: str = "BCEWithLogitsLoss",
-                 prediction_loss_config: Optional[dict] = None,
+                 seg_loss: str = "DiceLoss",
+                 seg_loss_config: Optional[dict] = None,
+                 cls_loss: str = "BCEWithLogitsLoss",
+                 cls_loss_config: Optional[dict] = None,
                  loss_weights: Tuple[float, float] = (0.5, 0.5),
                  num_classes: int = 2,
                  in_channels: int = 1,
@@ -63,10 +30,8 @@ class StrokeFormer(LightningModule):
                  weight_decay: float = 1e-3):
         super().__init__()
 
-        self.segmentation_loss = instantiate_loss(segmentation_loss, segmentation_loss_config)
-        self.prediction_loss = instantiate_loss(prediction_loss, prediction_loss_config)
-        self.loss_weights = loss_weights
-
+        self.loss = SegmentationLoss(seg_loss=seg_loss, seg_loss_config=seg_loss_config, cls_loss=cls_loss, cls_loss_config=cls_loss_config, loss_weights=loss_weights)
+ 
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
 
         self.num_classes = num_classes
@@ -87,8 +52,7 @@ class StrokeFormer(LightningModule):
 
         self.save_hyperparameters()
 
-    def forward(self, x: torch.Tensor, return_preds: bool = False) -> Union[
-        torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(self, x: torch.Tensor, return_preds: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
 
         logits = self.model(x)  # [B, N, D, H, W]
 
@@ -106,19 +70,17 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        seg_loss = self.segmentation_loss(logits, masks)
-        ce_loss = self.prediction_loss(logits, masks.to(dtype=logits.dtype))
-
-        loss = self.loss_weights[0] * seg_loss + self.loss_weights[1] * ce_loss
+        loss_dict = self.loss(logits, masks)
 
         log_dict = {
-            f"{prefix}_loss": loss,
-            f"{self.segmentation_loss.__class__.__name__}": seg_loss,
-            f"{self.prediction_loss.__class__.__name__}": ce_loss,
-            **compute_metrics(logits, masks, metrics=self.metrics, prefix=prefix),
+            **loss_dict,
+            **compute_metrics(logits, masks, metrics=self.metrics, prefix=prefix, lesions_only=True),
         }
 
         self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
+
+        loss = loss_dict[f"{prefix}loss"]
+        del loss_dict
 
         return loss
 

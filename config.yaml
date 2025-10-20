@@ -116,12 +116,12 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  segmentation_loss: BinaryDiceLoss
-  segmentation_loss_config:
+  seg_loss: BinaryDiceLoss
+  seg_loss_config:
     include_background: false
     num_classes: 2
-  prediction_loss: BCEWithLogitsLoss
-  prediction_loss_config: null
+  cls_loss: BCEWithLogitsLoss
+  cls_loss_config: null
   loss_weights:
   - 0.5
   - 0.5
