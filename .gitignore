@@ -19,7 +19,8 @@ data/
 augmented_scans.json
 
 # Results
-scores
+scores/
+cross_scores/
 lightning_logs/
 strokeformer/
 StrokeFormer/

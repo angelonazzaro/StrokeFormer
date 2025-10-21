@@ -1,13 +1,10 @@
 from typing import Literal, Union, Tuple, Optional
 
-from losses.losses import SegmentationLoss
-import monai.losses
 import torch
-import torch.nn as nn
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
-import losses
+from losses.losses import SegmentationLoss
 from model.segformer3d import SegFormer3D
 from utils import build_metrics, compute_metrics
 
