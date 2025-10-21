@@ -1,12 +1,13 @@
 import random
+from collections import defaultdict
 from functools import partial
 from typing import Optional, Literal, Union
 
 import numpy as np
 import torch
-
-from torchmetrics.functional import accuracy, recall, f1_score, precision, jaccard_index, matthews_corrcoef
-from torchmetrics.functional.segmentation import dice_score, hausdorff_distance
+from distorch import boundary_metrics, overlap_metrics
+from torchmetrics.functional import recall, f1_score, precision, jaccard_index, matthews_corrcoef
+from torchmetrics.functional.segmentation import dice_score
 from torchvision.transforms.v2.functional import to_pil_image
 
 from utils import overlay_img, get_lesion_size_category, get_slices_with_lesions
@@ -15,59 +16,82 @@ from utils import overlay_img, get_lesion_size_category, get_slices_with_lesions
 def compute_metrics(
         predictions: torch.Tensor,
         targets: torch.Tensor,
-        metrics: dict,
+        metrics: Optional[dict] = None,
         prefix: Optional[Literal["train", "val", "test"]] = None,
-        lesions_only: bool = False):
-    assert 4 <= predictions.ndim <= 6, \
-        "predictions and targets must have shape (B, N, H, W), (B, N, D, H, W) or (B, C, N, D, H, W)"
-    assert predictions.shape == targets.shape, "predictions and targets must have same shape"
+        lesions_only: bool = False,
+):
+    assert 4 <= predictions.ndim <= 6, "predictions and targets must have shape (B, N, H, W), (B, N, D, H, W), or (B, C, N, D, H, W)"
+    assert predictions.shape == targets.shape, "predictions and targets must have the same shape"
 
     prefix = f"{prefix}_" if prefix is not None else ""
-    scores = {f"{prefix}{m}": 0.0 if m != "hausdorff_distance" else float("inf") for m in metrics.keys()}
-
-    argmax_dim = 1 if predictions.ndim < 6 else 2
 
     # (B, H, W), (B, D, H, W), (B, C, D, H, W)
-    indexed_predictions = predictions.argmax(argmax_dim)
-    indexed_targets = targets.argmax(argmax_dim)
+    argmax_dim = 1 if predictions.ndim < 6 else 2
+
+    if metrics is None:
+        metrics = build_metrics(num_classes=predictions.shape[argmax_dim])
+
+    index_predictions = predictions.argmax(dim=argmax_dim)
+    index_targets = targets.argmax(dim=argmax_dim)
+
+    slices_with_lesions = get_slices_with_lesions(targets)
+
+    if index_predictions.ndim == 3:
+        # boundary metrics must be always computed on valid sets
+        bo_index_predictions = index_predictions[slices_with_lesions]
+        bo_index_targets = index_targets[slices_with_lesions]
+    elif index_predictions.ndim == 4:
+        bo_index_predictions = index_predictions[:, slices_with_lesions]
+        bo_index_targets = index_targets[:, slices_with_lesions]
+    else:
+        bo_index_predictions = index_predictions[:, :, slices_with_lesions]
+        bo_index_targets = index_targets[:, :, slices_with_lesions]
 
     if lesions_only:
-        slices_with_lesions = get_slices_with_lesions(targets)
+        index_predictions = bo_index_predictions
+        index_targets = bo_index_targets
 
-        if not slices_with_lesions.any():
-            return scores
-
-        if indexed_predictions.ndim <= 4:
+        if index_predictions.ndim <= 4:
             predictions = predictions[:, :, slices_with_lesions]
             targets = targets[:, :, slices_with_lesions]
         else:
             predictions = predictions[:, :, :, slices_with_lesions]
             targets = targets[:, :, :, slices_with_lesions]
 
-        if indexed_predictions.ndim == 3:
-            indexed_predictions = indexed_predictions[slices_with_lesions]
-            indexed_targets = indexed_targets[slices_with_lesions]
-        elif indexed_predictions.ndim == 4:
-            indexed_predictions = indexed_predictions[:, slices_with_lesions]
-            indexed_targets = indexed_targets[:, slices_with_lesions]
-        else:
-            indexed_predictions = indexed_predictions[:, :, slices_with_lesions]
-            indexed_targets = indexed_targets[:, :, slices_with_lesions]
+    scores = defaultdict(lambda: 0.0)
 
-    # TODO: handle hausdorff distance, torch implementation does not support 3D volumes, while
-    #  monai implementation keeps accumulating tensors without release the memory even on reset()
     for metric_name, metric_fn in metrics.items():
-        if metric_name == "dice" or metric_name == "hd":
-            score = metric_fn(predictions, targets)
-            if torch.isnan(score).any() or torch.isinf(score).any():
-                # replace invalid scores with zero for dice and inf for hd95
-                score = torch.nan_to_num(score, nan=0.0, posinf=float('inf'), neginf=0.0)
-            if metric_name == "hd":
-                score = score.mean()
-        else:
-            score = metric_fn(indexed_predictions, indexed_targets)
+        if metric_name == 'boundary_metrics':
+            if bo_index_predictions.numel() == 0 or bo_index_targets.numel() == 0:
+                scores[f"{prefix}hausdorff95_1_to_2"] = float("inf")
+                scores[f"{prefix}hausdorff95_2_to_1"] = float("inf")
+                scores[f"{prefix}hausdorff95"] = float("inf")
+                scores[f"{prefix}assd"] = float("inf")
+                continue
 
-        scores[f"{prefix}{metric_name}"] = score.item()
+            bo_metrics = metric_fn(bo_index_predictions, bo_index_targets)
+            for bo_metric, value in bo_metrics.__dict__.items():
+                value = torch.nan_to_num(value, 0).mean(dim=0)
+                if bo_metric in ["Hausdorff95_1_to_2", "Hausdorff95_2_to_1", "AverageSymmetricSurfaceDistance"]:
+                    name = bo_metric.lower() if bo_metric != "AverageSymmetricSurfaceDistance" else "assd"
+                    scores[f"{prefix}{name}"] = round(value.item(), 3)
+                    if "Hausdorff95" in bo_metric:
+                        scores[f"{prefix}hausdorff95"] += value.item()
+            scores[f"{prefix}hausdorff95"] = round(scores[f"{prefix}hausdorff95"] / 2, 3)
+
+        elif metric_name == 'overlap_metrics':
+            ov_metrics = metric_fn(index_predictions, index_targets)
+            for ov_metric, value in ov_metrics.__dict__.items():
+                value = torch.nan_to_num(value, 0).mean(dim=0) if ov_metric != "ConfusionMatrix" else value
+                if ov_metric == "PixelAccuracy":
+                    scores[f"{prefix}accuracy_background"] = round(value[0].item(), 3)
+                    scores[f"{prefix}accuracy_foreground"] = round(value[1].item(), 3)
+                elif ov_metric == "OverallPixelAccuracy":
+                    scores["accuracy"] = round(value.item(), 3)
+        elif metric_name == 'dice':
+            scores[f"{prefix}{metric_name}"] = round(metric_fn(predictions, targets).item(), 3)
+        else:
+            scores[f"{prefix}{metric_name}"] = round(metric_fn(index_predictions, index_targets).item(), 3)
 
     return scores
 
@@ -76,11 +100,26 @@ def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted
     task = "binary" if num_classes <= 2 else "multiclass"
 
     return {
-        "accuracy": partial(
-            accuracy,
+        "dice": partial(
+            dice_score,
+            num_classes=num_classes,
+            average=average,
+            include_background=False,
+            aggregation_level="global",
+        ),
+        "overlap_metrics": partial(overlap_metrics, num_classes=num_classes),
+        "boundary_metrics": partial(boundary_metrics),
+        "iou": partial(
+            jaccard_index,
             task=task,
             num_classes=num_classes,
             average=average,
+            ignore_index=None,
+        ),
+        "mcc": partial(
+            matthews_corrcoef,
+            task=task,
+            num_classes=num_classes,
             ignore_index=None
         ),
         "precision": partial(
@@ -104,32 +143,6 @@ def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted
             average=average,
             ignore_index=None
         ),
-        "iou": partial(
-            jaccard_index,
-            task=task,
-            num_classes=num_classes,
-            average=average,
-            ignore_index=None,
-        ),
-        "dice": partial(
-            dice_score,
-            num_classes=num_classes,
-            average=average,
-            include_background=False,
-            aggregation_level="global",
-        ),
-        "mcc": partial(
-            matthews_corrcoef,
-            task=task,
-            num_classes=num_classes,
-            ignore_index=None
-        ),
-        "hd": partial(
-            hausdorff_distance,
-            num_classes=num_classes,
-            include_background=False,
-            spacing=1
-        )
     }
 
 

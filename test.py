@@ -175,11 +175,13 @@ def test(args):
                         cam_overlay = torch.from_numpy(show_cam_on_image(scan_slice / 255, grayscale_cam[i, slice_idx], use_rgb=True))
                         cam_overlay = einops.rearrange(cam_overlay, "h w c -> c h w")
                         images.append(cam_overlay)
-                        del cam_overlay
 
                     grid = make_grid(images, padding=4, pad_value=255, nrow=len(images))
                     to_pil_image(grid).save(os.path.join(pred_dir, f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png"))  # noqa
                     del grid
+
+                    if cam_model is not None:
+                        del cam_overlay
 
                 # free memory
                 del gt, pd, scan_slice, mask_slice, pred_slice

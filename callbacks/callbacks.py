@@ -25,6 +25,7 @@ class LogPredictionCallback(Callback):
         self.masks = []
         self.log_every_n_val_epochs = log_every_n_val_epochs
         self.slices_per_scan = slices_per_scan
+        self.columns = []
 
     def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", outputs: STEP_OUTPUT,
                                 batch: Any, batch_idx: int, dataloader_idx: int = 0):
@@ -40,11 +41,22 @@ class LogPredictionCallback(Callback):
             return
 
         pl_module.eval()
-        columns = ["id", "slice idx", "lesion size", "ground-truth", "prediction"]
+        if len(self.columns) == 0:
+            self.columns = ["id", "slice idx", "lesion size", "ground-truth", "prediction"]
 
-        columns.extend(list(pl_module.metrics.keys()))
+            metrics = list(pl_module.metrics.keys())
 
-        table = wandb.Table(columns=columns)
+            if "overlap_metrics" in metrics:
+                metrics.extend(["accuracy", "accuracy_background", "accuracy_foreground"])
+                metrics.remove("overlap_metrics")
+
+            if "boundary_metrics" in metrics:
+                metrics.extend(["hausdorff95", "hausdorff95_1_to_2", "hausdorff95_2_to_1", "assd"])
+                metrics.remove("boundary_metrics")
+
+            self.columns.extend(metrics)
+
+        table = wandb.Table(columns=self.columns)
 
         if isinstance(self.scans, List):
             self.scans = torch.cat(self.scans)
