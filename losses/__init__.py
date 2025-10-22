@@ -1,1 +1,1 @@
-from .losses import BinaryDiceLoss
+from .losses import BinaryDiceLoss, ICILoss

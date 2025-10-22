@@ -27,7 +27,8 @@ class StrokeFormer(LightningModule):
                  weight_decay: float = 1e-3):
         super().__init__()
 
-        self.loss = SegmentationLoss(seg_loss=seg_loss, seg_loss_config=seg_loss_config, cls_loss=cls_loss, cls_loss_config=cls_loss_config, loss_weights=loss_weights)
+        self.loss = SegmentationLoss(seg_loss=seg_loss, seg_loss_config=seg_loss_config,
+                                     cls_loss=cls_loss, cls_loss_config=cls_loss_config, loss_weights=loss_weights)
  
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
 
@@ -67,7 +68,7 @@ class StrokeFormer(LightningModule):
 
         logits = self.forward(scans)
 
-        loss_dict = self.loss(logits, masks)
+        loss_dict = self.loss(logits, masks.to(dtype=scans.dtype), return_dict=True)
 
         log_dict = {
             **loss_dict,
