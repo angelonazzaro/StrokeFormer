@@ -2,7 +2,7 @@
 program: train.py
 project: StrokeFormer
 entity: neurone-lab
-name: SegFormer3D-baseline-sweep
+name: SegFormer3D-dynamic-ici-loss
 method: bayes
 metric:
   goal: minimize
