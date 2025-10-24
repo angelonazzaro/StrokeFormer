@@ -78,18 +78,22 @@ class AnoDDPM(LightningModule):
             # making sure this is called after the first optimizer step
             update_ema_params(self.ema, self.unet)
 
+        run_backward = self.trainer.global_step % 100 == 0
+
         scans, masks = batch
 
-        output_dict = self.forward(scans, True)
-        recons = output_dict["outputs"]
-
-        mse = (masks - recons).square()
-        mse = (mse > 0.5).float()
+        output_dict = self.forward(scans, run_backward)
 
         log_dict = {
             f"{prefix}_loss": output_dict["loss"],
-            **compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction"),
         }
+
+        if run_backward:
+            recons = output_dict["outputs"]
+
+            mse = (masks - recons).square()
+            mse = (mse > 0.5).float()
+            log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction"))
 
         self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
 

@@ -101,7 +101,7 @@ class ReconstructionDataset(IterableDataset):
         self.augment = augment
 
     def __len__(self):
-        return len(self.scans) * round_half_up(self.scan_dim[0] / (self.slices_per_scan * self.slice_stride))
+        return len(self.scans) * round_half_up(self.scan_dim[1] / (self.slices_per_scan * self.slice_stride))
 
     def __iter__(self):
         indexes = list(range(len(self.scans)))
