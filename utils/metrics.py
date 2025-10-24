@@ -6,8 +6,8 @@ from typing import Optional, Literal, Union
 import numpy as np
 import torch
 from distorch import boundary_metrics, overlap_metrics
-from torchmetrics.functional import recall, f1_score, precision, jaccard_index, matthews_corrcoef
-from torchmetrics.functional.segmentation import dice_score
+from torchmetrics.functional import recall, f1_score, precision, jaccard_index, matthews_corrcoef, auroc, roc, \
+    structural_similarity_index_measure as ssim, peak_signal_noise_ratio as psnr
 from torchvision.transforms.v2.functional import to_pil_image
 
 from utils import overlay_img, get_lesion_size_category, get_slices_with_lesions
@@ -19,6 +19,7 @@ def compute_metrics(
         metrics: Optional[dict] = None,
         prefix: Optional[Literal["train", "val", "test"]] = None,
         lesions_only: bool = False,
+        task: Literal["segmentation", "reconstruction"] = "segmentation",
 ):
     assert 4 <= predictions.ndim <= 6, "predictions and targets must have shape (B, N, H, W), (B, N, D, H, W), or (B, C, N, D, H, W)"
     assert predictions.shape == targets.shape, "predictions and targets must have the same shape"
@@ -51,12 +52,12 @@ def compute_metrics(
         index_predictions = bo_index_predictions
         index_targets = bo_index_targets
 
-        if index_predictions.ndim <= 4:
-            predictions = predictions[:, :, slices_with_lesions]
-            targets = targets[:, :, slices_with_lesions]
-        else:
-            predictions = predictions[:, :, :, slices_with_lesions]
-            targets = targets[:, :, :, slices_with_lesions]
+    if task == "reconstruction":
+        mse = predictions[:len(predictions) // 2]
+        recons = predictions[mse.shape[0]:]
+
+        masks = targets[:len(targets) // 2]
+        scans = targets[masks.shape[0]:]
 
     scores = defaultdict(lambda: 0.0)
 
@@ -87,63 +88,73 @@ def compute_metrics(
                     scores[f"{prefix}accuracy_background"] = round(value[0].item(), 3)
                     scores[f"{prefix}accuracy_foreground"] = round(value[1].item(), 3)
                 elif ov_metric == "OverallPixelAccuracy":
-                    scores["accuracy"] = round(value.item(), 3)
-        elif metric_name == 'dice':
-            scores[f"{prefix}{metric_name}"] = round(metric_fn(predictions, targets).item(), 3)
+                    scores[f"{prefix}accuracy"] = round(value.item(), 3)
+                elif ov_metric == "Dice":
+                    scores[f"{prefix}dice"] = round(value[1].item(), 3)
         else:
-            scores[f"{prefix}{metric_name}"] = round(metric_fn(index_predictions, index_targets).item(), 3)
+            if metric_name == "roc":
+                fpr, _, _ = metric_fn(index_predictions, index_targets)
+                scores[f"{prefix}fpr"] = round(fpr.mean().item(), 3)
+            elif metric_name == "ssim" and task == "reconstruction":
+                scores[f"{prefix}fpr"] = round(metric_fn(recons, scans).item(), 3)
+            else:
+                scores[f"{prefix}{metric_name}"] = round(metric_fn(index_predictions, index_targets.long() if metric_name == "auroc" else index_targets).item(), 3)
 
     return scores
 
+def build_metrics(num_classes: int = 2, task: Literal["segmentation", "reconstruction"] = "segmentation",
+                  average: Literal["micro", "macro", "weighted", "none"] = "macro"):
+    task_type = "binary" if num_classes <= 2 else "multiclass"
 
-def build_metrics(num_classes: int, average: Literal["micro", "macro", "weighted", "none"] = "macro"):
-    task = "binary" if num_classes <= 2 else "multiclass"
-
-    return {
-        "dice": partial(
-            dice_score,
-            num_classes=num_classes,
-            average=average,
-            include_background=False,
-            aggregation_level="global",
-        ),
+    metrics = {
         "overlap_metrics": partial(overlap_metrics, num_classes=num_classes),
-        "boundary_metrics": partial(boundary_metrics),
         "iou": partial(
             jaccard_index,
-            task=task,
+            task=task_type,
             num_classes=num_classes,
             average=average,
             ignore_index=None,
         ),
         "mcc": partial(
             matthews_corrcoef,
-            task=task,
+            task=task_type,
             num_classes=num_classes,
             ignore_index=None
         ),
         "precision": partial(
             precision,
-            task=task,
+            task=task_type,
             num_classes=num_classes,
             average=average,
             ignore_index=None
         ),
         "recall": partial(
             recall,
-            task=task,
+            task=task_type,
             num_classes=num_classes,
             ignore_index=None,
             average=average
         ),
         "f1": partial(
             f1_score,
-            task=task,
+            task=task_type,
             num_classes=num_classes,
             average=average,
             ignore_index=None
         ),
     }
+
+    if task == "segmentation":
+        metrics["boundary_metrics"] = partial(boundary_metrics)
+    elif task == "reconstruction":
+        metrics["auroc"] = partial(auroc, num_classes=num_classes, task=task_type, average=average)
+        metrics["ssim"] = partial(ssim)
+        metrics["psnr"] = partial(psnr)
+        metrics["roc"] = partial(roc, num_classes=num_classes, task_type=task_type, average=average)
+
+    metrics = {m: metrics[m] for m in sorted(metrics.keys())}
+
+    return metrics
 
 
 def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
@@ -186,9 +197,12 @@ def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
     return {"tp": tp_norm.item(), "fp": fp_norm.item(), "fn": fn_norm.item()}
 
 
-def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None):
+def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None, task: Literal["segmentation", "reconstruction"] = "segmentation"):
     with torch.no_grad():
-        preds = model(scans, return_preds=True)
+        if task == "segmentation":
+            preds = model(scans, return_preds=True)
+        else:
+            preds = model(scans, run_backwards=True)
 
     preds = (preds >= 0.5).float()
 
@@ -207,7 +221,7 @@ def predictions_generator(model, scans, masks, metrics: dict[partial], slices_pe
 
             lesion_size = get_lesion_size_category(mask_slice)
 
-            scores = compute_metrics(predicted_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics)
+            scores = compute_metrics(predicted_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics, task=task)
 
             mask_slice = torch.argmax(mask_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
             predicted_slice = torch.argmax(predicted_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)

@@ -12,10 +12,10 @@ from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, Mode
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
-from callbacks import LogPredictionCallback
+from callbacks import LogSegmentationPredictionCallback
 from constants import LESION_SIZES
-from dataset import MRIDataModule
-from model import StrokeFormer
+from dataset import SegmentationDataModule
+from models import StrokeFormer
 from utils import get_lesion_distribution_metadata, plot_lesion_size_distribution, round_half_up, plot_fold_distribution
 
 logging.basicConfig(
@@ -124,7 +124,7 @@ def main(args):
 
             return {"scans": scans, "masks": masks}
 
-        datamodule = MRIDataModule(
+        datamodule = SegmentationDataModule(
             paths={
                 "train": _make_paths(train_masks_paths),
                 "val": _make_paths(val_masks_paths),
@@ -139,7 +139,7 @@ def main(args):
             num_classes=args.num_classes,
         )
 
-        logger.info("Instantiating model and callbacks...")
+        logger.info("Instantiating models and callbacks...")
 
         segmentation_loss_config = json.loads(args.segmentation_loss_config)
         prediction_loss_config = json.loads(args.prediction_loss_config)
@@ -161,7 +161,7 @@ def main(args):
         )
 
         callbacks = [
-            LogPredictionCallback(
+            LogSegmentationPredictionCallback(
                 num_images=args.num_images,
                 log_every_n_val_epochs=args.log_every_n_val_epochs,
                 slices_per_scan=args.slices_per_scan,
@@ -209,7 +209,7 @@ def main(args):
         ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][-1]
 
         cmd = [
-            "python", "test.py",
+            "python", "test_strokeformer.py",
             "--seed", str(args.seed),
             "--batch_size", str(1),
             "--scans", *test_paths["scans"],
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("--resize_to", nargs=2, type=int, default=None)
     parser.add_argument("--augment", action="store_true")
 
-    # model
+    # models
     parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--in_channels", type=int, default=1)
     parser.add_argument("--lr", type=float, default=4e-4)

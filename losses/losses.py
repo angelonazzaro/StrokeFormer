@@ -101,7 +101,7 @@ class ICILoss(torch.nn.modules.loss._Loss):
                 Written in the original paper as L_{instance} in the formalism.
             loss_function_center: Any segmentation loss used to calculate the center-of-instance segmentation loss.
                 Written in the original paper as L_{center} in the formalism.
-            activation: Set the non-linear function used for segmentation in the last layer of the model.
+            activation: Set the non-linear function used for segmentation in the last layer of the models.
                 The valid inputs are "sigmoid", "softmax", or "none". Default: "sigmoid"
             num_out_chn: Number of channels/classes that `outputs` and `labels` tensors (BNHW[D] where N is number of classes).
                 Default: 1
@@ -347,7 +347,7 @@ class ICILoss(torch.nn.modules.loss._Loss):
             softmax=False
         )
 
-        # Calculate non-linear function outside the model. Especially useful if ones use MONAI models
+        # Calculate non-linear function outside the models. Especially useful if ones use MONAI models
         # where non-linear function is (usually) not included within the models.
         if self.activation == "sigmoid":
             outputs_act = torch.sigmoid(outputs)
@@ -840,7 +840,7 @@ class SegmentationLoss(nn.Module):
         # always compute classification loss
         cls_loss = self.cls_loss(predictions, targets)
 
-        # segmentation loss (only if lesion exists). this should help the model to focus on segmenting
+        # segmentation loss (only if lesion exists). this should help the models to focus on segmenting
         # slices that actually contain lesions
         seg_loss = torch.tensor(0.0, requires_grad=True, device=predictions.device)
         slices_with_lesions = get_slices_with_lesions(targets)

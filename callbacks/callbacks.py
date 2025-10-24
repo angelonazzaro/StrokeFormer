@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Literal
 
 import torch
 import wandb
@@ -19,8 +19,11 @@ class LogPredictionCallback(Callback):
             - prediction
     """
 
-    def __init__(self, num_images: int, log_every_n_val_epochs: int, slices_per_scan: Optional[int] = None):
+    def __init__(self, num_images: int, log_every_n_val_epochs: int,
+                 task: Literal["segmentation", "reconstruction"] = "segmentation",
+                 slices_per_scan: Optional[int] = None):
         self.num_images = num_images
+        self.task = task
         self.scans = []
         self.masks = []
         self.log_every_n_val_epochs = log_every_n_val_epochs
@@ -47,12 +50,14 @@ class LogPredictionCallback(Callback):
             metrics = list(pl_module.metrics.keys())
 
             if "overlap_metrics" in metrics:
-                metrics.extend(["accuracy", "accuracy_background", "accuracy_foreground"])
+                metrics.extend(["dice", "accuracy", "accuracy_background", "accuracy_foreground"])
                 metrics.remove("overlap_metrics")
 
             if "boundary_metrics" in metrics:
                 metrics.extend(["hausdorff95", "hausdorff95_1_to_2", "hausdorff95_2_to_1", "assd"])
                 metrics.remove("boundary_metrics")
+
+            metrics = sorted(metrics)
 
             self.columns.extend(metrics)
 
@@ -63,7 +68,7 @@ class LogPredictionCallback(Callback):
             self.masks = torch.cat(self.masks)
 
         i = 0
-        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan)):
+        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan), task=task):
             table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]), wandb.Image(result["pd"]), *result["scores"].values())
             if j % self.slices_per_scan == 0:
                 i += 1

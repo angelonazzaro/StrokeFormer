@@ -1,5 +1,5 @@
 
-program: train.py
+program: train_strokeformer.py
 project: StrokeFormer
 entity: neurone-lab
 name: SegFormer3D-dynamic-ici-loss
@@ -53,5 +53,5 @@ command:
   - ${program}
   - fit
   - --config
-  - config.yaml
+  - strokeformer_config.yaml
   - ${args}
