@@ -6,7 +6,7 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
 from constants import SCAN_DIM
-from dataset.mri_dataset import MRIDataset
+from dataset.mri_dataset import SegmentationDataset, ReconstructionDataset
 
 
 def validate_paths_structure(paths):
@@ -49,7 +49,128 @@ def validate_paths_structure(paths):
                     f"got {type(paths[split][subkey]).__name__}")
 
 
-class MRIDataModule(LightningDataModule):
+def resize(scans, masks, new_h: int, new_w: int):
+    # with align_corners = False and antialias = True this is equivalent to PIL downsample method
+    # shape must be (B, D*C, H, W)
+    # anti-alias is restricted to 4-D tensors
+    B, C, D, H, W = scans.shape
+    scans = scans.view(B, C * D, H, W)
+    masks = masks.view(B, C * D, H, W)
+
+    scans = f.interpolate(scans,
+                          size=(new_h, new_w),
+                          mode="bilinear",
+                          align_corners=False,
+                          antialias=True)
+    masks = f.interpolate(masks,
+                          size=(new_h, new_w),
+                          align_corners=False,
+                          mode="bilinear",
+                          antialias=True).long()
+
+    # restore original shape of (B, C, D, resize_h, resize_w)
+    scans = scans.view(B, C, D, new_h, new_w)
+    masks = masks.view(B, C, D, new_h, new_w)
+
+    return scans, masks
+
+
+class ReconstructionDataModule(LightningDataModule):
+    def __init__(self,
+                 paths: dict,
+                 num_classes: int,
+                 ext: str = ".npy",
+                 slice_stride: int = 1,
+                 slices_per_scan: int = 1,
+                 scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
+                 resize_to: Optional[Tuple[int, int]] = None,
+                 transforms: Optional[List[Callable]] = None,
+                 augment: bool = False,
+                 batch_size: int = 32,
+                 num_workers: int = 0):
+        super().__init__()
+
+        validate_paths_structure(paths)
+
+        self.paths = paths
+
+        self.ext = ext
+
+        self.slice_stride = slice_stride
+        self.slices_per_scan = slices_per_scan
+        self.scan_dim = scan_dim
+        self.resize_to = resize_to
+
+        self.transforms = transforms
+        self.augment = augment
+
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+        self.num_classes = num_classes
+
+        self.train_set, self.val_set, self.test_set = (None, None, None)
+
+    def setup(self, stage):
+        augment = self.augment
+        splits = ['train', 'val']
+
+        if stage == 'test':
+            augment = False
+            splits = ['test']
+
+        for split in splits:
+            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
+                                                                masks=self.paths[split]["masks"],
+                                                                ext=self.ext,
+                                                                slice_stride=self.slice_stride,
+                                                                slices_per_scan=self.slices_per_scan,
+                                                                scan_dim=self.scan_dim,
+                                                                transforms=self.transforms,
+                                                                augment=augment))
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_set,
+            num_workers=self.num_workers,
+            batch_size=self.batch_size,
+            shuffle=False,  # does not work with iterable dataset
+            collate_fn=self.custom_collate,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_set,
+            num_workers=self.num_workers,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self.custom_collate,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_set,
+            num_workers=self.num_workers,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=self.custom_collate,
+        )
+
+    def custom_collate(self, batch):
+        # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
+        # this could lead the models to learn a sort of ordering bias
+        scans, masks, = zip(
+            *[(scan[perm], mask[perm]) for scan, mask in batch for perm in [torch.randperm(scan.shape[0])]])
+
+        scans, masks = torch.stack(scans), torch.stack(masks)
+
+        if self.resize_to is not None:
+            scans, masks = resize(scans, masks, *self.resize_to)
+
+        return scans.squeeze(2), masks.squeeze(2) # remove D dimension
+
+
+class SegmentationDataModule(LightningDataModule):
     def __init__(self,
                  paths: dict,
                  num_classes: int,
@@ -94,14 +215,14 @@ class MRIDataModule(LightningDataModule):
             splits = ['test']
 
         for split in splits:
-            setattr(self, f"{split}_set", MRIDataset(scans=self.paths[split]["scans"],
-                                                     masks=self.paths[split]["masks"],
-                                                     ext=self.ext,
-                                                     scan_dim=self.scan_dim,
-                                                     overlap=self.overlap,
-                                                     subvolume_dim=self.subvolume_dim,
-                                                     transforms=self.transforms,
-                                                     augment=augment))
+            setattr(self, f"{split}_set", SegmentationDataset(scans=self.paths[split]["scans"],
+                                                              masks=self.paths[split]["masks"],
+                                                              ext=self.ext,
+                                                              scan_dim=self.scan_dim,
+                                                              overlap=self.overlap,
+                                                              subvolume_dim=self.subvolume_dim,
+                                                              transforms=self.transforms,
+                                                              augment=augment))
 
     def train_dataloader(self):
         return DataLoader(
@@ -135,27 +256,7 @@ class MRIDataModule(LightningDataModule):
         scans, masks = torch.stack(scans), torch.stack(masks)
 
         if self.resize_to is not None:
-            # with align_corners = False and antialias = True this is equivalent to PIL downsample method
-            # shape must be (B, D*C, H, W)
-            # anti-alias is restricted to 4-D tensors
-            B, C, D, H, W = scans.shape
-            scans = scans.view(B, C * D, H, W)
-            masks = masks.view(B, C * D, H, W)
-
-            scans = f.interpolate(scans,
-                                  size=(self.resize_to[0], self.resize_to[1]),
-                                  mode="bilinear",
-                                  align_corners=False,
-                                  antialias=True)
-            masks = f.interpolate(masks,
-                                  size=(self.resize_to[0], self.resize_to[1]),
-                                  align_corners=False,
-                                  mode="bilinear",
-                                  antialias=True).long()
-
-            # restore original shape of (B, C, D, resize_h, resize_w)
-            scans = scans.view(B, C, D, self.resize_to[0], self.resize_to[1])
-            masks = masks.view(B, C, D, self.resize_to[0], self.resize_to[1])
+            scans, masks = resize(scans, masks, *self.resize_to)
 
         masks = torch.nn.functional.one_hot(masks.long().squeeze(1), num_classes=self.num_classes)  # [B, D, H, W, N]
         masks = masks.permute(0, -1, -4, -3, -2)  # [B, D, H, W, N] -> [B, N, D, H, W]
