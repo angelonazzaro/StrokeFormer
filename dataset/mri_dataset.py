@@ -9,7 +9,7 @@ from torch.utils.data import IterableDataset
 from torchvision.transforms import v2
 
 from constants import SCAN_DIM
-from utils import round_half_up, extract_patches
+from utils import round_half_up, extract_patches, compute_head_mask
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str], masks: Optional[Union[List[str], str]] = None,
@@ -70,18 +70,42 @@ class ReconstructionDataset(IterableDataset):
             scans: Union[List[str], str],
             masks: Optional[Union[List[str], str]] = None,
             ext: str = ".npy",
-            slice_stride: int = 1,
-            slices_per_scan: int = 1,
+            brain_area_coverage: float = 0.3,
             scan_dim: Tuple[int, int, int, int,] = SCAN_DIM,
             transforms: Optional[List[Callable]] = None,
             augment: bool = False,
     ):
         super().__init__()
 
-        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
+        self.scans_filepaths, self.masks_filepaths = init_scans_masks_filepaths(scans, masks, ext)
+        self.scans, self.masks = [], []
+        self.num_slices = 0
+        self.brain_area_coverage = brain_area_coverage
 
-        self.slice_stride = slice_stride
-        self.slices_per_scan = slices_per_scan
+        # filter out non-healthy slices and slices not containing brain tissue
+        total_area = torch.tensor(scan_dim[-1] * scan_dim[-2])
+        for i in range(len(self.scans_filepaths)):
+            scan, mask = load_data(self.scans_filepaths, self.masks_filepaths, i, augment, transforms, scan_dim)
+
+            healthy_slices = ~mask.any(dim=(0, 2, 3))
+
+            scan = scan[:, healthy_slices]
+            mask = mask[:, healthy_slices]
+
+            scan_head_mask = compute_head_mask(scan)
+            scan_head_mask_sum = scan_head_mask.sum(dim=(0, 2, 3))
+
+            area_coverage = scan_head_mask_sum / total_area.repeat(scan.shape[-3])
+            slices_with_brain_tissue = area_coverage >= brain_area_coverage
+
+            scan = scan[:, slices_with_brain_tissue]
+            mask = mask[:, slices_with_brain_tissue]
+
+            if scan.shape[-3] > 0:
+                self.num_slices += scan.shape[-3]
+                self.scans.append(scan)
+                self.masks.append(mask)
+
         self.scan_dim = scan_dim
 
         if transforms is not None:
@@ -94,24 +118,25 @@ class ReconstructionDataset(IterableDataset):
                 # transforms.RandomAffine(0, translate=(0.02, 0.1)),
                 # transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
                 # transforms.CenterCrop(256),
-                v2.ToTensor(),
+                v2.ToImage(), # same as ToTensor
+                v2.ToDtype(torch.float32, scale=True), # same as ToTensor
                 v2.Normalize((0.5, ) * len(scan_dim), (0.5, ) * len(scan_dim)) # noqa
             ])
 
         self.augment = augment
 
     def __len__(self):
-        return len(self.scans) * round_half_up(self.scan_dim[1] / (self.slices_per_scan * self.slice_stride))
+        return self.num_slices
 
     def __iter__(self):
         indexes = list(range(len(self.scans)))
 
         for idx in indexes:
-            scan, mask = load_data(self.scans, self.masks, idx, self.augment, self.transforms, self.scan_dim)
+            scan, mask = self.scans[idx], self.masks[idx]
 
-            for i in range(0, scan.shape[0], self.slice_stride):
-                scan_slice = scan[:, i:i + self.slices_per_scan]
-                mask_slice = mask[:, i:i + self.slices_per_scan]
+            for i in range(0, scan.shape[0]):
+                scan_slice = scan[:, i:i + 1]
+                mask_slice = mask[:, i:i + 1]
 
                 slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
                 slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)

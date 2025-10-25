@@ -7,6 +7,10 @@ import torch
 from torchvision.transforms.v2.functional import to_pil_image
 
 
+def compute_head_mask(scan: torch.Tensor, threshold: float = 8.0) -> torch.Tensor:
+    # Assumes scan tensor is intensity image, mask where intensity <= threshold
+    return scan > threshold
+
 def get_slices_with_lesions(volumes: torch.Tensor):
     # expected one-hot tensors of shape (B, N, H, W), (B, N, D, H, W) or (B, C, N, D, H, W)
     argmax_dim = 1 if volumes.ndim < 6 else 2

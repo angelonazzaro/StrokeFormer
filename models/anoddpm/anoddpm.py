@@ -93,6 +93,7 @@ class AnoDDPM(LightningModule):
 
             mse = (masks - recons).square()
             mse = (mse > 0.5).float()
+
             log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction"))
 
         self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)

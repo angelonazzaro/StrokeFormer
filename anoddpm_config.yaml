@@ -148,8 +148,7 @@ data:
       scans: data/ATLAS_2/Processed/Scans
   num_classes: 2
   ext: .npy
-  slice_stride: 1
-  slices_per_scan: 1
+  brain_area_coverage: 0.3
   scan_dim:
   - 1
   - 189

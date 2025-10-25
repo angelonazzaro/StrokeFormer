@@ -80,8 +80,7 @@ class ReconstructionDataModule(LightningDataModule):
                  paths: dict,
                  num_classes: int,
                  ext: str = ".npy",
-                 slice_stride: int = 1,
-                 slices_per_scan: int = 1,
+                 brain_area_coverage: float = 0.3,
                  scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
                  resize_to: Optional[Tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
@@ -96,8 +95,7 @@ class ReconstructionDataModule(LightningDataModule):
 
         self.ext = ext
 
-        self.slice_stride = slice_stride
-        self.slices_per_scan = slices_per_scan
+        self.brain_area_coverage = brain_area_coverage
         self.scan_dim = scan_dim
         self.resize_to = resize_to
 
@@ -123,8 +121,7 @@ class ReconstructionDataModule(LightningDataModule):
             setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
                                                                 masks=self.paths[split]["masks"],
                                                                 ext=self.ext,
-                                                                slice_stride=self.slice_stride,
-                                                                slices_per_scan=self.slices_per_scan,
+                                                                brain_area_coverage=self.brain_area_coverage,
                                                                 scan_dim=self.scan_dim,
                                                                 transforms=self.transforms,
                                                                 augment=augment))
