@@ -61,14 +61,14 @@ class AnoDDPM(LightningModule):
         self.save_hyperparameters()
 
 
-    def forward(self, x, run_backward: bool = False):
+    def forward(self, x, run_backward: bool = False, whole_sequence: Optional[Literal["whole", "half"]] = None):
         loss, estimates = self.diffusion_model.p_loss(self.unet, x, train_start=self.train_start)
 
         return_dict = {"loss": loss, "estimates": estimates}
 
         if run_backward:
-            outputs = self.diffusion_model.forward_backward(self.unet, x, see_whole_sequence=None, t_distance=200)
-            return_dict["outputs"] = outputs
+            recons = self.diffusion_model.forward_backward(self.unet, x, see_whole_sequence=whole_sequence, t_distance=200)
+            return_dict["recons"] = recons
 
         return return_dict
 
@@ -78,7 +78,8 @@ class AnoDDPM(LightningModule):
             # making sure this is called after the first optimizer step
             update_ema_params(self.ema, self.unet)
 
-        run_backward = self.trainer.global_step % 100 == 0
+        # run_backward = self.trainer.global_step % 100 == 0 and not self.trainer.sanity_checking
+        run_backward = False
 
         scans, masks = batch
 
@@ -89,7 +90,7 @@ class AnoDDPM(LightningModule):
         }
 
         if run_backward:
-            recons = output_dict["outputs"]
+            recons = output_dict["recons"]
 
             mse = (masks - recons).square()
             mse = (mse > 0.5).float()

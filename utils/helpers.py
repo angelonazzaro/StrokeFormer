@@ -7,7 +7,7 @@ import torch
 from torchvision.transforms.v2.functional import to_pil_image
 
 
-def compute_head_mask(scan: torch.Tensor, threshold: float = 8.0) -> torch.Tensor:
+def compute_head_mask(scan: Union[np.ndarray, torch.Tensor], threshold: float = 8.0) -> Union[np.ndarray, torch.Tensor]:
     # Assumes scan tensor is intensity image, mask where intensity <= threshold
     return scan > threshold
 
