@@ -5,7 +5,7 @@ import torch.nn.functional as f
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
-from constants import SCAN_DIM
+from constants import SCAN_DIM, SLICE_DIM
 from dataset.mri_dataset import SegmentationDataset, ReconstructionDataset
 
 
@@ -80,8 +80,7 @@ class ReconstructionDataModule(LightningDataModule):
                  paths: dict,
                  num_classes: int,
                  ext: str = ".npy",
-                 brain_area_coverage: float = 0.3,
-                 scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
+                 slice_dim: Tuple[int, int, int] = SLICE_DIM,
                  resize_to: Optional[Tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
@@ -95,8 +94,7 @@ class ReconstructionDataModule(LightningDataModule):
 
         self.ext = ext
 
-        self.brain_area_coverage = brain_area_coverage
-        self.scan_dim = scan_dim
+        self.slice_dim = slice_dim
         self.resize_to = resize_to
 
         self.transforms = transforms
@@ -121,8 +119,7 @@ class ReconstructionDataModule(LightningDataModule):
             setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
                                                                 masks=self.paths[split]["masks"],
                                                                 ext=self.ext,
-                                                                brain_area_coverage=self.brain_area_coverage,
-                                                                scan_dim=self.scan_dim,
+                                                                slice_dim=self.slice_dim,
                                                                 transforms=self.transforms,
                                                                 augment=augment))
 
@@ -154,17 +151,13 @@ class ReconstructionDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
-        # this could lead the models to learn a sort of ordering bias
-        scans, masks, = zip(
-            *[(scan[perm], mask[perm]) for scan, mask in batch for perm in [torch.randperm(scan.shape[0])]])
-
+        scans, masks = zip(*batch)
         scans, masks = torch.stack(scans), torch.stack(masks)
 
         if self.resize_to is not None:
-            scans, masks = resize(scans, masks, *self.resize_to)
+            scans, masks = resize(scans.unsqueeze(2), masks.unsqueeze(2), *self.resize_to)
 
-        return scans.squeeze(2), masks.squeeze(2) # remove D dimension
+        return scans.squeeze(2), masks.squeeze(2)
 
 
 class SegmentationDataModule(LightningDataModule):

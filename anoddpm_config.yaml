@@ -3,7 +3,8 @@ seed_everything: 42
 trainer:
   accelerator: auto
   strategy: auto
-  devices: 1
+  devices:
+    - 1
   num_nodes: 1
   precision: null
   logger:
@@ -12,7 +13,7 @@ trainer:
       name: AnoDDPM
       save_dir: .
       version: null
-      offline: true
+      offline: false
       dir: null
       id: null
       anonymous: null
@@ -42,17 +43,11 @@ trainer:
       monitor_gym: null
       settings: null
   callbacks:
-    - class_path: callbacks.LogPredictionCallback
-      init_args:
-        num_images: 1
-        log_every_n_val_epochs: 1
-        slices_per_scan: 20
-        task: reconstruction
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
         min_delta: 0.001
-        patience: 25
+        patience: 500
         verbose: true
         mode: min
         strict: true
@@ -80,7 +75,7 @@ trainer:
         enable_version_counter: true
   fast_dev_run: false
   max_epochs: null
-  min_epochs: null
+  min_epochs: 3000
   max_steps: -1
   min_steps: null
   max_time: null
@@ -113,12 +108,12 @@ trainer:
   model_registry: null
 model:
   img_size:
-    - 256
-    - 256
+    - 128
+    - 128
   base_channels: 128
   conv_resample: true
   num_classes: 2
-  n_heads: 1
+  n_heads: 2
   n_head_channels: -1
   channel_mults: ''
   num_res_blocks: 2
@@ -132,7 +127,7 @@ model:
   T: 1000
   diff_loss_type: l2
   diff_loss_weight: null
-  diff_noise: gauss
+  diff_noise: simplex
   lr: 0.0001
   weight_decay: 0.0
   betas:
@@ -141,25 +136,23 @@ model:
 data:
   paths:
     train:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/2D/Masks2D
+      scans: data/ATLAS_2/Processed/2D/Scans2D
     val:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/2D/Masks2D
+      scans: data/ATLAS_2/Processed/2D/Masks2D
   num_classes: 2
   ext: .npy
-  brain_area_coverage: 0.3
-  scan_dim:
+  slice_dim:
   - 1
-  - 189
   - 192
   - 192
   resize_to:
-    - 256
-    - 256
+    - 128
+    - 128
   transforms: null
   augment: false
-  batch_size: 1
+  batch_size: 32
   num_workers: 0
 optimizer: null
 lr_scheduler: null

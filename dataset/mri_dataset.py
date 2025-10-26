@@ -5,11 +5,11 @@ from typing import Callable, List, Union, Optional, Tuple
 import einops
 import numpy as np
 import torch
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, Dataset
 from torchvision.transforms import v2
 
-from constants import SCAN_DIM
-from utils import round_half_up, extract_patches, compute_head_mask
+from constants import SCAN_DIM, SLICE_DIM
+from utils import round_half_up, extract_patches
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str], masks: Optional[Union[List[str], str]] = None,
@@ -40,8 +40,8 @@ def load_data(scans: List[str],
               index: int,
               augment: bool,
               transforms: Optional[Callable],
-              scan_dim: Tuple[int, int, int, int,] = SCAN_DIM):
-    scan = np.load(scans[index])  # expected shape: (C, H, W, D)
+              scan_dim = SCAN_DIM):
+    scan = np.load(scans[index])  # expected shape: (C, H, W, D) or (C, H, W)
     mask = np.zeros_like(scan)
 
     if masks is not None:
@@ -49,8 +49,9 @@ def load_data(scans: List[str],
 
     scan, mask = torch.from_numpy(scan), torch.from_numpy(mask)
 
-    scan = einops.rearrange(scan, "c h w d -> c d h w")
-    mask = einops.rearrange(mask, "c h w d -> c d h w")
+    if scan.ndim == 4:
+        scan = einops.rearrange(scan, "c h w d -> c d h w")
+        mask = einops.rearrange(mask, "c h w d -> c d h w")
 
     if scan.shape != scan_dim or mask.shape != scan_dim:
         raise ValueError(
@@ -64,49 +65,27 @@ def load_data(scans: List[str],
     return scan, mask
 
 
-class ReconstructionDataset(IterableDataset):
+class ReconstructionDataset(Dataset):
     def __init__(
             self,
             scans: Union[List[str], str],
             masks: Optional[Union[List[str], str]] = None,
             ext: str = ".npy",
-            brain_area_coverage: float = 0.3,
-            scan_dim: Tuple[int, int, int, int,] = SCAN_DIM,
+            slice_dim: Tuple[int, int, int] = SLICE_DIM,
             transforms: Optional[List[Callable]] = None,
             augment: bool = False,
     ):
         super().__init__()
 
-        self.scans_filepaths, self.masks_filepaths = init_scans_masks_filepaths(scans, masks, ext)
-        self.scans, self.masks = [], []
-        self.num_slices = 0
-        self.brain_area_coverage = brain_area_coverage
+        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
 
-        # filter out non-healthy slices and slices not containing brain tissue
-        total_area = torch.tensor(scan_dim[-1] * scan_dim[-2])
-        for i in range(len(self.scans_filepaths)):
-            scan, mask = load_data(self.scans_filepaths, self.masks_filepaths, i, augment, transforms, scan_dim)
+        # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
+        # this could lead the models to learn a sort of ordering bias
+        perm = np.random.permutation(len(self.scans))
+        self.scans = [self.scans[i] for i in perm]
+        self.masks = [self.masks[i] for i in perm]
 
-            healthy_slices = ~mask.any(dim=(0, 2, 3))
-
-            scan = scan[:, healthy_slices]
-            mask = mask[:, healthy_slices]
-
-            scan_head_mask = compute_head_mask(scan)
-            scan_head_mask_sum = scan_head_mask.sum(dim=(0, 2, 3))
-
-            area_coverage = scan_head_mask_sum / total_area.repeat(scan.shape[-3])
-            slices_with_brain_tissue = area_coverage >= brain_area_coverage
-
-            scan = scan[:, slices_with_brain_tissue]
-            mask = mask[:, slices_with_brain_tissue]
-
-            if scan.shape[-3] > 0:
-                self.num_slices += scan.shape[-3]
-                self.scans.append(scan)
-                self.masks.append(mask)
-
-        self.scan_dim = scan_dim
+        self.slice_dim = slice_dim
 
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
@@ -120,31 +99,24 @@ class ReconstructionDataset(IterableDataset):
                 # transforms.CenterCrop(256),
                 v2.ToImage(), # same as ToTensor
                 v2.ToDtype(torch.float32, scale=True), # same as ToTensor
-                v2.Normalize((0.5, ) * len(scan_dim), (0.5, ) * len(scan_dim)) # noqa
+                v2.Normalize((0.5, ) * slice_dim[-3], (0.5, ) * slice_dim[-3]) # noqa
             ])
 
         self.augment = augment
 
     def __len__(self):
-        return self.num_slices
+        return len(self.scans)
 
-    def __iter__(self):
-        indexes = list(range(len(self.scans)))
+    def __getitem__(self, idx):
+        scan_slice, mask_slice = load_data(self.scans, self.masks, idx, self.augment, self.transforms, self.slice_dim)
 
-        for idx in indexes:
-            scan, mask = self.scans[idx], self.masks[idx]
+        slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
+        slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)
+        scan_slice = torch.clip(scan_slice, slice_range[0], slice_range[1])
 
-            for i in range(0, scan.shape[0]):
-                scan_slice = scan[:, i:i + 1]
-                mask_slice = mask[:, i:i + 1]
+        scan_slice = scan_slice / (slice_range[1] - slice_range[0])
 
-                slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
-                slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)
-                scan_slice = torch.clip(scan_slice, slice_range[0], slice_range[1])
-
-                scan_slice = scan_slice / (slice_range[1] - slice_range[0])
-
-                yield scan_slice, mask_slice
+        return scan_slice, mask_slice
 
 
 class SegmentationDataset(IterableDataset):

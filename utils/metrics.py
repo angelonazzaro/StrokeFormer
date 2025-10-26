@@ -198,13 +198,11 @@ def slice_wise_fp_fn(prediction: Union[torch.Tensor, np.ndarray],
     return {"tp": tp_norm.item(), "fp": fp_norm.item(), "fn": fn_norm.item()}
 
 
-def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None, task: Literal["segmentation", "reconstruction"] = "segmentation"):
+def predictions_generator(model, scans, masks, metrics: dict[partial], slices_per_scan: Optional[int] = None):
     with torch.no_grad():
-        if task == "segmentation":
-            preds = model(scans, return_preds=True)
-            preds = (preds >= 0.5).float()
-        else:
-            preds = model(scans, run_backward=True)["outputs"]
+        preds = model(scans, return_preds=True)
+
+    preds = (preds >= 0.5).float()
 
     # randomly sample slices_per_scan
     if slices_per_scan is not None and slices_per_scan < scans.shape[-3]:
@@ -221,7 +219,7 @@ def predictions_generator(model, scans, masks, metrics: dict[partial], slices_pe
 
             lesion_size = get_lesion_size_category(mask_slice)
 
-            scores = compute_metrics(predicted_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics, task=task)
+            scores = compute_metrics(predicted_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics)
 
             mask_slice = torch.argmax(mask_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
             predicted_slice = torch.argmax(predicted_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
