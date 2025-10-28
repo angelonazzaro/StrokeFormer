@@ -68,7 +68,7 @@ class LogPredictionCallback(Callback):
             self.masks = torch.cat(self.masks)
 
         i = 0
-        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan), task=task):
+        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan)):
             table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]), wandb.Image(result["pd"]), *result["scores"].values())
             if j % self.slices_per_scan == 0:
                 i += 1
