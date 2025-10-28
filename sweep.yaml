@@ -2,11 +2,11 @@
 program: train_strokeformer.py
 project: StrokeFormer
 entity: neurone-lab
-name: SegFormer3D-dynamic-ici-loss
+name: SegFormer3D-dynamic-dice-loss
 method: bayes
 metric:
   goal: minimize
-  name: val_loss
+  name: val_BinaryDiceLoss
 parameters:
   model.lr:
     distribution: log_uniform_values

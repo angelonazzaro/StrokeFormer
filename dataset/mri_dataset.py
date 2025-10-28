@@ -9,7 +9,7 @@ from torch.utils.data import IterableDataset, Dataset
 from torchvision.transforms import v2
 
 from constants import SCAN_DIM, SLICE_DIM
-from utils import round_half_up, extract_patches
+from utils import round_half_up, extract_patches, compute_head_mask
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str], masks: Optional[Union[List[str], str]] = None,
@@ -110,13 +110,15 @@ class ReconstructionDataset(Dataset):
     def __getitem__(self, idx):
         scan_slice, mask_slice = load_data(self.scans, self.masks, idx, self.augment, self.transforms, self.slice_dim)
 
+        head_mask = compute_head_mask(scan_slice)
+
         slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
         slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)
         scan_slice = torch.clip(scan_slice, slice_range[0], slice_range[1])
 
         scan_slice = scan_slice / (slice_range[1] - slice_range[0])
 
-        return scan_slice, mask_slice
+        return scan_slice, head_mask.to(dtype=mask_slice.dtype), mask_slice
 
 
 class SegmentationDataset(IterableDataset):

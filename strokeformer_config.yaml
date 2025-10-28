@@ -3,7 +3,8 @@ seed_everything: 42
 trainer:
   accelerator: auto
   strategy: auto
-  devices: auto
+  devices:
+  - 1
   num_nodes: 1
   precision: null
   logger:
@@ -12,7 +13,7 @@ trainer:
       name: StrokeFormer3D-baseline
       save_dir: .
       version: null
-      offline: true
+      offline: false
       dir: null
       id: null
       anonymous: null
@@ -45,7 +46,7 @@ trainer:
   - class_path: callbacks.LogPredictionCallback
     init_args:
       num_images: 1
-      log_every_n_val_epochs: 1
+      log_every_n_val_epochs: 15
       slices_per_scan: 20
   - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     init_args:
@@ -116,32 +117,33 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  seg_loss: ICILoss
-  seg_loss_config: null
+  seg_loss: BinaryDiceLoss
+  seg_loss_config:
+    num_classes: 2
   cls_loss: BCEWithLogitsLoss
   cls_loss_config: null
   loss_weights:
-  - 0.5
-  - 0.5
+  - 0.75
+  - 0.25
   num_classes: 2
   in_channels: 1
   betas:
   - 0.9
   - 0.999
   eps: 1.0e-08
-  lr: 4.57367565084245e-05
-  init_lr: 1.7706510495673209e-06
-  warmup_steps: 48
+  lr: 0.0006608856713267737
+  init_lr: 2.368312398178715e-05
+  warmup_steps: 8
   lr_scheduler_interval: epoch
-  weight_decay: 0.0006726522399071583
+  weight_decay: 0.0006480380780002768
 data:
   paths:
     train:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/Splits/Train/Masks
+      scans: data/ATLAS_2/Processed/Splits/Train/Scans
     val:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/Splits/Val/Masks
+      scans: data/ATLAS_2/Processed/Splits/Val/Scans
   num_classes: 2
   ext: .npy
   scan_dim:
@@ -156,7 +158,7 @@ data:
   - 128
   transforms: null
   augment: false
-  batch_size: 1
+  batch_size: 8
   num_workers: 0
 optimizer: null
 lr_scheduler: null

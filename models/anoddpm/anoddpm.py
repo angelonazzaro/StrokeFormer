@@ -61,13 +61,13 @@ class AnoDDPM(LightningModule):
         self.save_hyperparameters()
 
 
-    def forward(self, x, run_backward: bool = False, whole_sequence: Optional[Literal["whole", "half"]] = None):
-        loss, estimates = self.diffusion_model.p_loss(self.unet, x, train_start=self.train_start)
+    def forward(self, x, head_masks=None, run_backward: bool = False, whole_sequence: Optional[Literal["whole", "half"]] = None):
+        loss, estimates = self.diffusion_model.p_loss(self.unet, x, train_start=self.train_start, head_masks=head_masks)
 
         return_dict = {"loss": loss, "estimates": estimates}
 
         if run_backward:
-            recons = self.diffusion_model.forward_backward(self.unet, x, see_whole_sequence=whole_sequence, t_distance=200)
+            recons = self.diffusion_model.forward_backward(self.unet, x, see_whole_sequence=whole_sequence)
             return_dict["recons"] = recons
 
         return return_dict
@@ -81,9 +81,9 @@ class AnoDDPM(LightningModule):
         # run_backward = self.trainer.global_step % 100 == 0 and not self.trainer.sanity_checking
         run_backward = False
 
-        scans, masks = batch
+        scans, head_masks, masks = batch
 
-        output_dict = self.forward(scans, run_backward)
+        output_dict = self.forward(scans, head_masks, run_backward)
 
         log_dict = {
             f"{prefix}_loss": output_dict["loss"],
@@ -97,7 +97,7 @@ class AnoDDPM(LightningModule):
 
             log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction"))
 
-        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
+        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True, rank_zero_only=True, sync_dist=True)
 
         return output_dict["loss"]
 

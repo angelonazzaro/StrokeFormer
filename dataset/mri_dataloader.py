@@ -128,8 +128,10 @@ class ReconstructionDataModule(LightningDataModule):
             self.train_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=False,  # does not work with iterable dataset
+            shuffle=True,
             collate_fn=self.custom_collate,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0
         )
 
     def val_dataloader(self):
@@ -137,8 +139,10 @@ class ReconstructionDataModule(LightningDataModule):
             self.val_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=True,
             collate_fn=self.custom_collate,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0
         )
 
     def test_dataloader(self):
@@ -148,16 +152,19 @@ class ReconstructionDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=self.custom_collate,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0
         )
 
     def custom_collate(self, batch):
-        scans, masks = zip(*batch)
-        scans, masks = torch.stack(scans), torch.stack(masks)
+        scans, head_masks, masks = zip(*batch)
+        scans, head_masks, masks = torch.stack(scans), torch.stack(head_masks), torch.stack(masks)
 
         if self.resize_to is not None:
-            scans, masks = resize(scans.unsqueeze(2), masks.unsqueeze(2), *self.resize_to)
+            _, masks = resize(scans.unsqueeze(2), masks.unsqueeze(2), *self.resize_to)
+            scans, head_masks = resize(scans.unsqueeze(2), head_masks.unsqueeze(2), *self.resize_to)
 
-        return scans.squeeze(2), masks.squeeze(2)
+        return scans.squeeze(2), head_masks.squeeze(2), masks.squeeze(2)
 
 
 class SegmentationDataModule(LightningDataModule):

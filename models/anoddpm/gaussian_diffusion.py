@@ -389,25 +389,37 @@ class GaussianDiffusionModel:
         nll = torch.where((t == 0), decoder_nll, kl)
         return {"output": nll, "pred_x_0": output["pred_x_0"]}
 
-    def calc_loss(self, model, x_0, t):
+    def calc_loss(self, model, x_0, t, head_masks=None):
         noise = self.noise_fn(x_0, t).float()
 
         x_t = self.sample_q(x_0, t, noise)
         estimate_noise = model(x_t, t)
+
+        diff = estimate_noise - noise
+
         loss = {}
         if self.loss_type == "l1":
-            loss["loss"] = mean_flat((estimate_noise - noise).abs())
-        elif self.loss_type == "l2":
-            loss["loss"] = mean_flat((estimate_noise - noise).square())
-        elif self.loss_type == "hybrid":
-            # add vlb term
-            loss["vlb"] = self.calc_vlb_xt(model, x_0, x_t, t, estimate_noise)["output"]
-            loss["loss"] = loss["vlb"] + mean_flat((estimate_noise - noise).square())
+            elem_loss = diff.abs()
+        else: # l2, hybrid
+            elem_loss = diff.square()
+
+        if head_masks is not None:
+            masked_element_loss = elem_loss * head_masks
+            spatial_sum = masked_element_loss.flatten(1).sum(dim=1)  # [B]
+            mask_sum = head_masks.flatten(1).sum(dim=1)  # [B]
+            # avoid division by zero (if a batch element is fully masked out)
+            loss_per_batch_element = spatial_sum / mask_sum.clamp_min(1)
+            loss["loss"] = loss_per_batch_element
         else:
-            loss["loss"] = mean_flat((estimate_noise - noise).square())
+            loss["loss"] = mean_flat(elem_loss)
+
+        if self.loss_type == "hybrid":
+            loss["vlb"] = self.calc_vlb_xt(model, x_0, x_t, t, estimate_noise)["output"]
+            loss["loss"] = loss["vlb"] + loss["loss"]
+
         return loss, x_t, estimate_noise
 
-    def p_loss(self, model, x_0, train_start: bool = False):
+    def p_loss(self, model, x_0, train_start: bool = False, head_masks=None):
         if self.loss_weight is None:
             if train_start:
                 t = torch.randint(
@@ -420,7 +432,7 @@ class GaussianDiffusionModel:
         else:
             t, weights = self.sample_t_with_weights(x_0.shape[0], x_0.device)
 
-        loss, x_t, eps_t = self.calc_loss(model, x_0, t)
+        loss, x_t, eps_t = self.calc_loss(model, x_0, t, head_masks)
         loss = ((loss["loss"] * weights).mean(), (loss, x_t, eps_t))
         return loss
 
