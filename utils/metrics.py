@@ -1,5 +1,4 @@
 import random
-from collections import defaultdict
 from functools import partial
 from typing import Optional, Literal, Union
 
@@ -8,9 +7,10 @@ import torch
 from distorch import boundary_metrics, overlap_metrics
 from torchmetrics.functional import recall, f1_score, precision, jaccard_index, matthews_corrcoef, auroc, roc, \
     structural_similarity_index_measure as ssim, peak_signal_noise_ratio as psnr
+from torchmetrics.functional.segmentation import dice_score
 from torchvision.transforms.v2.functional import to_pil_image
 
-from utils import overlay_img, get_lesion_size_category, get_slices_with_lesions
+from utils import overlay_img, get_lesion_size_category, filter_sick_slices_per_volume
 
 
 def compute_metrics(
@@ -34,17 +34,15 @@ def compute_metrics(
         pred_indices = predictions.argmax(dim=argmax_dim)
         target_indices = targets.argmax(dim=argmax_dim)
 
-        slices_with_lesions = get_slices_with_lesions(targets)
+        bo_pred_indices, bo_target_indices = filter_sick_slices_per_volume(predictions, targets)
 
-        # boundary metrics must be always computed on valid sets
-        def select_lesion_slices(idx_preds, idx_targets):
-            if idx_preds.ndim == 3:
-                return idx_preds[slices_with_lesions], idx_targets[slices_with_lesions]
-            elif idx_preds.ndim == 4:
-                return idx_preds[:, slices_with_lesions], idx_targets[:, slices_with_lesions]
-            return idx_preds[:, :, slices_with_lesions], idx_targets[:, :, slices_with_lesions]
+        if lesions_only:
+            dice_predictions, dice_targets = bo_pred_indices, bo_target_indices
+        else:
+            dice_predictions, dice_targets = predictions, targets
 
-        bo_pred_indices, bo_target_indices = select_lesion_slices(pred_indices, target_indices)
+        if bo_pred_indices.numel() > 0:
+            bo_pred_indices, bo_target_indices = bo_pred_indices.argmax(dim=argmax_dim), bo_target_indices.argmax(dim=argmax_dim)
 
         if lesions_only:
             pred_indices, target_indices = bo_pred_indices, bo_target_indices
@@ -57,14 +55,30 @@ def compute_metrics(
         recons, scans = predictions[half_len:], targets[half_len:]
         predictions, targets = predictions[:half_len], targets[:half_len]
 
-    scores = defaultdict(float)
+    scores = {}
+    dist_metrics = ["hausdorff95_1_to_2", "hausdorff95_2_to_1", "hausdorff95", "assd"]
+    ov_metrics = ["accuracy", "accuracy_background", "accuracy_foreground"]
+
+    for metric_name in metrics.keys():
+        if metric_name == "boundary_metrics":
+            for m in dist_metrics:
+                scores[f"{prefix}{m}"] = float("inf")
+        elif metric_name == "overlap_metrics":
+            for m in ov_metrics:
+                scores[f"{prefix}{m}"] = 0.0
+        elif metric_name == "roc":
+            scores[f"{prefix}fpr"] = 0.0
+        else:
+            scores[f"{prefix}{metric_name}"] = 0.0
+
+    if predictions.numel() == 0:
+        return scores
 
     for metric_name, metric_fn in metrics.items():
         if metric_name == "boundary_metrics":
             # handle boundary metrics only if lesion slices are available; else assign infinity
             if bo_pred_indices.numel() == 0 or bo_target_indices.numel() == 0:
-                inf_metrics = ["hausdorff95_1_to_2", "hausdorff95_2_to_1", "hausdorff95", "assd"]
-                for m in inf_metrics:
+                for m in dist_metrics:
                     scores[f"{prefix}{m}"] = float("inf")
                 continue
 
@@ -89,14 +103,14 @@ def compute_metrics(
                     scores[f"{prefix}accuracy_foreground"] = round(val[1].item(), 3)
                 elif name == "OverallPixelAccuracy":
                     scores[f"{prefix}accuracy"] = round(val.item(), 3)
-                elif name == "Dice":
-                    scores[f"{prefix}dice"] = round(val[1].item(), 3)
         else:
             if metric_name == "roc":
                 fpr, _, _ = metric_fn(predictions, targets.long())
                 scores[f"{prefix}fpr"] = round(fpr.mean().item(), 3)
             elif metric_name == "ssim" and task == "reconstruction":
-                scores[f"{prefix}fpr"] = round(metric_fn(recons, scans).item(), 3)
+                scores[f"{prefix}ssim"] = round(metric_fn(recons, scans).item(), 3)
+            elif metric_name == "dice" and task == "segmentation":
+                scores[f"{prefix}dice"] = round(metric_fn(dice_predictions, dice_targets).item(), 3)
             else:
                 scores[f"{prefix}{metric_name}"] = round(metric_fn(predictions, targets.long() if metric_name == "auroc" else targets).item(), 3)
 
@@ -109,6 +123,11 @@ def build_metrics(num_classes: int = 2, task: Literal["segmentation", "reconstru
 
     metrics = {
         "overlap_metrics": partial(overlap_metrics, num_classes=num_classes),
+        "dice": partial(
+            dice_score,
+            include_background=False, num_classes=num_classes,
+            average=average, aggregation_level="global",
+        ),
         "iou": partial(
             jaccard_index,
             task=task_type,

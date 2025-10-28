@@ -11,19 +11,51 @@ def compute_head_mask(scan: Union[np.ndarray, torch.Tensor], threshold: float = 
     # Assumes scan tensor is intensity image, mask where intensity <= threshold
     return scan > threshold
 
-def get_slices_with_lesions(volumes: torch.Tensor):
-    # expected one-hot tensors of shape (B, N, H, W), (B, N, D, H, W) or (B, C, N, D, H, W)
-    argmax_dim = 1 if volumes.ndim < 6 else 2
-    index_volumes = volumes.argmax(dim=argmax_dim) # (B, H, W), (B, D, H, W) or (B, C, D, H, W)
 
-    if index_volumes.ndim == 3:
-        over_dims = (1, 2)
-    elif index_volumes.ndim == 4:
-        over_dims = (0, 2, 3)
-    else:
-        over_dims = (0, 1, 3, 4)
+def filter_sick_slices_per_volume(scans: torch.Tensor, masks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # filter sick slices based only on the foreground channel
+    sick_targets = masks[:, 1].any(dim=(-2, -1))  # (B, D)
+    max_z = torch.max(sick_targets.sum(dim=-1)).item()
 
-    return index_volumes.any(dim=over_dims)
+    preds = []
+    tgts = []
+
+    if max_z > 0:
+        for i in range(scans.shape[0]):
+            sick_slices = sick_targets[i]
+            pred = scans[i][:, sick_slices]
+            tgt = masks[i][:, sick_slices]
+
+            if pred.shape[-3] == 0:
+                continue
+
+            # lost channel and/or class dim
+            if pred.ndim < scans.ndim - 1:
+                if masks.ndim == 5:
+                    # lost class dim
+                    _, N, _, H, W = scans.shape
+                    pred = pred.reshape(N, -1, H, W)
+                    tgt = tgt.reshape(N, -1, H, W)
+                else:
+                    _, C, N, _, H, W = scans.shape
+                    pred = pred.reshape(C, N, -1, H, W)
+                    tgt = tgt.reshape(C, N, -1, H, W)
+
+            pad_amount = max_z - pred.shape[-3]
+
+            if pad_amount > 0:
+                # b_W, a_W, b_H, a_H, b_D, a_D, ...
+                pad_width = (0, 0, 0, 0, 0, pad_amount, *((0, 0,) * (pred.ndim - 3)))
+                pred = torch.nn.functional.pad(pred, pad_width, value=0, mode='constant')
+                tgt = torch.nn.functional.pad(tgt, pad_width, value=0, mode='constant')
+
+            preds.append(pred)
+            tgts.append(tgt)
+
+    if len(preds) == 0:
+        return torch.tensor(preds), torch.tensor(tgts)
+
+    return torch.stack(preds, dim=0), torch.stack(tgts, dim=0)
 
 
 def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False,

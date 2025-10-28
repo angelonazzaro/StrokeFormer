@@ -50,7 +50,7 @@ class LogPredictionCallback(Callback):
             metrics = list(pl_module.metrics.keys())
 
             if "overlap_metrics" in metrics:
-                metrics.extend(["dice", "accuracy", "accuracy_background", "accuracy_foreground"])
+                metrics.extend(["accuracy", "accuracy_background", "accuracy_foreground"])
                 metrics.remove("overlap_metrics")
 
             if "boundary_metrics" in metrics:
@@ -68,8 +68,11 @@ class LogPredictionCallback(Callback):
             self.masks = torch.cat(self.masks)
 
         i = 0
-        for j, result in enumerate(predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics, slices_per_scan=self.slices_per_scan)):
-            table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]), wandb.Image(result["pd"]), *result["scores"].values())
+        for j, result in enumerate(
+                predictions_generator(model=pl_module, scans=self.scans, masks=self.masks, metrics=pl_module.metrics,
+                                      slices_per_scan=self.slices_per_scan)):
+            table.add_data(f"scan_{i}", result["slice_idx"], result["lesion_size"], wandb.Image(result["gt"]),
+                           wandb.Image(result["pd"]), *result["scores"].values())
             if j % self.slices_per_scan == 0:
                 i += 1
 

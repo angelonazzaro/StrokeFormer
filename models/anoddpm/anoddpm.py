@@ -60,8 +60,8 @@ class AnoDDPM(LightningModule):
 
         self.save_hyperparameters()
 
-
-    def forward(self, x, head_masks=None, run_backward: bool = False, whole_sequence: Optional[Literal["whole", "half"]] = None):
+    def forward(self, x, head_masks=None, run_backward: bool = False,
+                whole_sequence: Optional[Literal["whole", "half"]] = None):
         loss, estimates = self.diffusion_model.p_loss(self.unet, x, train_start=self.train_start, head_masks=head_masks)
 
         return_dict = {"loss": loss, "estimates": estimates}
@@ -71,7 +71,6 @@ class AnoDDPM(LightningModule):
             return_dict["recons"] = recons
 
         return return_dict
-
 
     def _common_step(self, batch, batch_idx, prefix: Literal['train', 'val', 'test']):
         if batch_idx > 1 and prefix == 'train':
@@ -95,9 +94,11 @@ class AnoDDPM(LightningModule):
             mse = (masks - recons).square()
             mse = (mse > 0.5).float()
 
-            log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction"))
+            log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0),
+                                              metrics=self.metrics, prefix=prefix, task="reconstruction"))
 
-        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True, rank_zero_only=True, sync_dist=True)
+        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True, rank_zero_only=True,
+                      sync_dist=True)
 
         return output_dict["loss"]
 
@@ -108,7 +109,8 @@ class AnoDDPM(LightningModule):
         return self._common_step(batch, batch_idx, prefix='val')
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.unet.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(self.unet.parameters(), lr=self.lr, betas=self.betas,
+                                      weight_decay=self.weight_decay)
 
         return {
             "optimizer": optimizer
