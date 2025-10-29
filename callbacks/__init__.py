@@ -1,1 +1,1 @@
-from .callbacks import LogPredictionCallback
+from .callbacks import LogSegmentationPredictionCallback, LogReconstructionPredictionCallback

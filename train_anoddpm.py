@@ -1,5 +1,3 @@
-import os
-
 import torch
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
@@ -7,7 +5,6 @@ from lightning.pytorch.loggers import WandbLogger
 from dataset.mri_dataloader import ReconstructionDataModule
 from models import AnoDDPM
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,3"
 
 class MyCLI(LightningCLI):
     def after_instantiate_classes(self, **kwargs):

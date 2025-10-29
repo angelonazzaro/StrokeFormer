@@ -6,6 +6,7 @@ from lightning.pytorch.loggers import WandbLogger
 from dataset import SegmentationDataModule
 from models import StrokeFormer
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 class MyCLI(LightningCLI):
     def after_instantiate_classes(self, **kwargs):

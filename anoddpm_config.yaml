@@ -3,7 +3,7 @@ seed_everything: 42
 trainer:
   accelerator: auto
   strategy: ddp_find_unused_parameters_true
-  devices: 3
+  devices: -1
   num_nodes: 1
   precision: null
   logger:
@@ -12,7 +12,7 @@ trainer:
       name: AnoDDPM
       save_dir: .
       version: null
-      offline: true
+      offline: false
       dir: null
       id: null
       anonymous: null
@@ -42,6 +42,9 @@ trainer:
       monitor_gym: null
       settings: null
   callbacks:
+    - class_path: callbacks.LogReconstructionPredictionCallback
+      init_args:
+        log_every_n_val_epochs: 50
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
@@ -152,7 +155,7 @@ data:
   transforms: null
   augment: false
   batch_size: 32
-  num_workers: 0
+  num_workers: 7
 optimizer: null
 lr_scheduler: null
 ckpt_path: null

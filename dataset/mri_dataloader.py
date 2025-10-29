@@ -139,7 +139,7 @@ class ReconstructionDataModule(LightningDataModule):
             self.val_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             collate_fn=self.custom_collate,
             pin_memory=True,
             persistent_workers=self.num_workers > 0
