@@ -17,13 +17,15 @@ data/
 .vscode
 .zed
 augmented_scans.json
+config.yaml
 
 # Results
 scores/
 cross_scores/
 lightning_logs/
-strokeformer/
 StrokeFormer/
+anoddpm
+AnoDDPM
 
 # CarveMix
 *.csv

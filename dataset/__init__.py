@@ -1,2 +1,2 @@
-from .mri_dataloader import MRIDataModule
-from .mri_dataset import MRIDataset
+from .mri_dataloader import SegmentationDataModule, ReconstructionDataModule
+from .mri_dataset import SegmentationDataset, ReconstructionDataset

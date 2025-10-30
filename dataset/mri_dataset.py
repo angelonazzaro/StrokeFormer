@@ -5,14 +5,123 @@ from typing import Callable, List, Union, Optional, Tuple
 import einops
 import numpy as np
 import torch
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, Dataset
 from torchvision.transforms import v2
 
-from constants import SCAN_DIM
-from utils import round_half_up, extract_patches
+from constants import SCAN_DIM, SLICE_DIM
+from utils import round_half_up, extract_patches, compute_head_mask
 
 
-class MRIDataset(IterableDataset):
+def init_scans_masks_filepaths(scans: Union[List[str], str], masks: Optional[Union[List[str], str]] = None,
+                               ext: str = ".npy"):
+    if isinstance(scans, str):
+        # load file paths from directory
+        if not os.path.exists(scans) or not os.path.isdir(scans):
+            raise ValueError(f"`scans` must be a valid directory path: {scans}")
+
+        scans = sorted(glob(os.path.join(scans, "*" + ext)))
+
+    if masks is not None:
+        if isinstance(masks, str):
+            if not os.path.exists(masks) or not os.path.isdir(masks):
+                raise ValueError(f"`masks` must be a valid directory path: {masks}")
+
+            masks = sorted(glob(os.path.join(masks, "*" + ext)))
+
+        assert len(masks) == len(scans), "MRIDataset: scans and masks must have the same length"
+    else:
+        masks = None
+
+    return scans, masks
+
+
+def load_data(scans: List[str],
+              masks: Optional[List[str]],
+              index: int,
+              augment: bool,
+              transforms: Optional[Callable],
+              scan_dim = SCAN_DIM):
+    scan = np.load(scans[index])  # expected shape: (C, H, W, D) or (C, H, W)
+    mask = np.zeros_like(scan)
+
+    if masks is not None:
+        mask = np.load(masks[index])
+
+    scan, mask = torch.from_numpy(scan), torch.from_numpy(mask)
+
+    if scan.ndim == 4:
+        scan = einops.rearrange(scan, "c h w d -> c d h w")
+        mask = einops.rearrange(mask, "c h w d -> c d h w")
+
+    if scan.shape != scan_dim or mask.shape != scan_dim:
+        raise ValueError(
+            f"`scan`,`mask` have an unusual shape: {scan.shape}, {mask.shape}. Expected {scan_dim}.")
+
+    if augment and transforms is not None:
+        scan, mask = transforms(scan, mask)
+
+    mask = mask.long().to(dtype=scan.dtype)
+
+    return scan, mask
+
+
+class ReconstructionDataset(Dataset):
+    def __init__(
+            self,
+            scans: Union[List[str], str],
+            masks: Optional[Union[List[str], str]] = None,
+            ext: str = ".npy",
+            slice_dim: Tuple[int, int, int] = SLICE_DIM,
+            transforms: Optional[List[Callable]] = None,
+            augment: bool = False,
+    ):
+        super().__init__()
+
+        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
+
+        # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
+        # this could lead the models to learn a sort of ordering bias
+        perm = np.random.permutation(len(self.scans))
+        self.scans = [self.scans[i] for i in perm]
+        self.masks = [self.masks[i] for i in perm]
+
+        self.slice_dim = slice_dim
+
+        if transforms is not None:
+            self.transforms = v2.Compose(transforms)
+        else:
+            # apply AnoDDPM default transforms
+            self.transforms = v2.Compose([
+                v2.ToPILImage(),
+                # transforms.CenterCrop((175, 240)),
+                # transforms.RandomAffine(0, translate=(0.02, 0.1)),
+                # transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
+                # transforms.CenterCrop(256),
+                v2.ToImage(), # same as ToTensor
+                v2.ToDtype(torch.float32, scale=True), # same as ToTensor
+                v2.Normalize((0.5, ) * slice_dim[-3], (0.5, ) * slice_dim[-3]) # noqa
+            ])
+
+        self.augment = augment
+
+    def __len__(self):
+        return len(self.scans)
+
+    def __getitem__(self, idx):
+        scan_slice, mask_slice = load_data(self.scans, self.masks, idx, self.augment, self.transforms, self.slice_dim)
+
+        head_mask = compute_head_mask(scan_slice)
+
+        slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
+        slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)
+        scan_slice = torch.clip(scan_slice, slice_range[0], slice_range[1])
+
+        scan_slice = scan_slice / (slice_range[1] - slice_range[0])
+
+        return scan_slice, head_mask.to(dtype=mask_slice.dtype), mask_slice
+
+
+class SegmentationDataset(IterableDataset):
     def __init__(self,
                  scans: Union[List[str], str],
                  masks: Optional[Union[List[str], str]] = None,
@@ -80,26 +189,7 @@ class MRIDataset(IterableDataset):
         if overlap is not None:
             overlap = (overlap[-3], 1.0, 1.0)
 
-        self.scans = scans
-        self.masks = masks
-
-        if isinstance(scans, str):
-            # load file paths from directory
-            if not os.path.exists(scans) or not os.path.isdir(scans):
-                raise ValueError(f"`scans` must be a valid directory path: {scans}")
-
-            self.scans = sorted(glob(os.path.join(scans, "*" + ext)))
-
-        if masks is not None:
-            if isinstance(masks, str):
-                if not os.path.exists(masks) or not os.path.isdir(masks):
-                    raise ValueError(f"`masks` must be a valid directory path: {masks}")
-
-                self.masks = sorted(glob(os.path.join(masks, "*" + ext)))
-
-            assert len(self.masks) == len(self.scans), "MRIDataset: scans and masks must have the same length"
-        else:
-            self.masks = None
+        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
 
         self.scan_dim = scan_dim
         self.subvolume_dim = subvolume_dim
@@ -121,35 +211,12 @@ class MRIDataset(IterableDataset):
     def __len__(self):
         return len(self.scans) * self.subvolumes_num
 
-    def _load_data(self, index):
-        scan = np.load(self.scans[index])  # expected shape: (C, H, W, D)
-        mask = np.zeros_like(scan)
-
-        if self.masks is not None:
-            mask = np.load(self.masks[index])
-
-        scan, mask = torch.from_numpy(scan), torch.from_numpy(mask)
-
-        scan = einops.rearrange(scan, "c h w d -> c d h w")
-        mask = einops.rearrange(mask, "c h w d -> c d h w")
-
-        if scan.shape != self.scan_dim or mask.shape != self.scan_dim:
-            raise ValueError(
-                f"`scan`,`mask` have an unusual shape: {scan.shape}, {mask.shape}. Expected {self.scan_dim}.")
-
-        if self.augment and self.transforms is not None:
-            scan, mask = self.transforms(scan, mask)
-
-        mask = mask.long().to(dtype=scan.dtype)
-
-        return scan, mask
-
     def __iter__(self):
         # TODO: implement multiple workers logic to avoid data duplication
         indexes = list(range(len(self.scans)))
 
         for index in indexes:
-            scan, mask = self._load_data(index)
+            scan, mask = load_data(self.scans, self.masks, index, self.augment, self.transforms, self.scan_dim)
 
             scan_chunks = extract_patches(scan=scan, overlap=self.overlap, patch_dim=(self.subvolume_dim, None, None))
             mask_chunks = extract_patches(scan=mask, overlap=self.overlap, patch_dim=(self.subvolume_dim, None, None))

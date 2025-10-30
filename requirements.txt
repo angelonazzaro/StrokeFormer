@@ -11,6 +11,8 @@ numpy==2.3.0
 pandas==2.3.3
 grad-cam==1.5.5
 matplotlib==3.10.6
+numba==0.62.1
+scikit-image==0.25.2
 nibabel==5.3.2
 jupyter==1.1.1
 monai==1.5.1

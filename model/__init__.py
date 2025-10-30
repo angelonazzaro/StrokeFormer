@@ -1,1 +1,0 @@
-from .strokeformer import StrokeFormer

@@ -5,7 +5,7 @@ from lightning import LightningModule
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
 from losses.losses import SegmentationLoss
-from model.segformer3d import SegFormer3D
+from models.strokeformer.segformer3d import SegFormer3D
 from utils import build_metrics, compute_metrics
 
 

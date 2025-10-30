@@ -1,0 +1,161 @@
+# lightning.pytorch==2.5.5
+seed_everything: 42
+trainer:
+  accelerator: auto
+  strategy: ddp_find_unused_parameters_true
+  devices: -1
+  num_nodes: 1
+  precision: null
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: AnoDDPM
+      save_dir: .
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: AnoDDPM
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+      entity: neurone-lab
+      notes: null
+      tags: null
+      config: null
+      config_exclude_keys: null
+      config_include_keys: null
+      allow_val_change: null
+      group: anoddpm
+      job_type: null
+      mode: null
+      force: null
+      reinit: null
+      resume: null
+      resume_from: null
+      fork_from: null
+      save_code: null
+      tensorboard: null
+      sync_tensorboard: null
+      monitor_gym: null
+      settings: null
+  callbacks:
+    - class_path: callbacks.LogReconstructionPredictionCallback
+      init_args:
+        log_every_n_val_epochs: 50
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        min_delta: 0.001
+        patience: 500
+        verbose: true
+        mode: min
+        strict: true
+        check_finite: true
+        stopping_threshold: null
+        divergence_threshold: null
+        check_on_train_epoch_end: false
+        log_rank_zero_only: false
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: null
+        filename: AnoDDPM-{epoch:02d}-{val_loss:.2f}
+        monitor: val_loss
+        verbose: true
+        save_last: null
+        save_top_k: 1
+        save_on_exception: false
+        save_weights_only: false
+        mode: min
+        auto_insert_metric_name: true
+        every_n_train_steps: null
+        train_time_interval: null
+        every_n_epochs: null
+        save_on_train_epoch_end: true
+        enable_version_counter: true
+  fast_dev_run: false
+  max_epochs: 3000
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: null
+  enable_checkpointing: null
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: AnoDDPM
+  model_registry: null
+model:
+  img_size:
+    - 128
+    - 128
+  base_channels: 128
+  conv_resample: true
+  num_classes: 2
+  n_heads: 2
+  n_head_channels: -1
+  channel_mults: ''
+  num_res_blocks: 2
+  dropout: 0
+  attention_resolutions: 32,16,8
+  biggan_updown: true
+  in_channels: 1
+  diff_betas: null
+  beta_schedule: linear
+  train_start: true
+  T: 1000
+  diff_loss_type: l2
+  diff_loss_weight: null
+  diff_noise: simplex
+  lr: 0.0001
+  weight_decay: 0.0
+  betas:
+  - 0.9
+  - 0.999
+data:
+  paths:
+    train:
+      masks: data/ATLAS_2/Processed/2D/Splits/Train/Masks
+      scans: data/ATLAS_2/Processed/2D/Splits/Train/Scans
+    val:
+      masks: data/ATLAS_2/Processed/2D/Splits/Val/Masks
+      scans: data/ATLAS_2/Processed/2D/Splits/Val/Scans
+  num_classes: 2
+  ext: .npy
+  slice_dim:
+  - 1
+  - 192
+  - 192
+  resize_to:
+    - 128
+    - 128
+  transforms: null
+  augment: false
+  batch_size: 32
+  num_workers: 7
+optimizer: null
+lr_scheduler: null
+ckpt_path: null

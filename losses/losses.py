@@ -6,12 +6,11 @@ import einops
 import monai.losses
 import torch
 import torch.nn as nn
+from monai.losses import DiceLoss
 from torchmetrics.functional.segmentation import dice_score
 
+from utils import filter_sick_slices_per_volume
 from .ici_tools import connected_components, connected_components_with_gradients, get_corrected_indices
-from monai.losses import DiceLoss
-
-from utils import get_slices_with_lesions
 
 _MODULES = [monai.losses, nn, sys.modules[__name__]]
 
@@ -101,7 +100,7 @@ class ICILoss(torch.nn.modules.loss._Loss):
                 Written in the original paper as L_{instance} in the formalism.
             loss_function_center: Any segmentation loss used to calculate the center-of-instance segmentation loss.
                 Written in the original paper as L_{center} in the formalism.
-            activation: Set the non-linear function used for segmentation in the last layer of the model.
+            activation: Set the non-linear function used for segmentation in the last layer of the models.
                 The valid inputs are "sigmoid", "softmax", or "none". Default: "sigmoid"
             num_out_chn: Number of channels/classes that `outputs` and `labels` tensors (BNHW[D] where N is number of classes).
                 Default: 1
@@ -347,7 +346,7 @@ class ICILoss(torch.nn.modules.loss._Loss):
             softmax=False
         )
 
-        # Calculate non-linear function outside the model. Especially useful if ones use MONAI models
+        # Calculate non-linear function outside the models. Especially useful if ones use MONAI models
         # where non-linear function is (usually) not included within the models.
         if self.activation == "sigmoid":
             outputs_act = torch.sigmoid(outputs)
@@ -830,8 +829,8 @@ class SegmentationLoss(nn.Module):
     ) -> Union[torch.Tensor, dict]:
         """
         Args:
-            predictions: segmentation predictions (B, N, D, H, W) or (B, C, N, D, H, W)
-            targets: Ground-truth segmentation mask (B, N, D, H, W) or (B, C, N, D, H, W)
+            predictions: segmentation predictions (B, 2, D, H, W) or (B, C, 2, D, H, W)
+            targets: Ground-truth segmentation mask (B, 2, D, H, W) or (B, C, 2, D, H, W)
             prefix: Prefix of training/inference step. Can be either 'train', 'val', 'test'.
             return_dict: If True, returns dict with separate losses.
         """
@@ -840,19 +839,13 @@ class SegmentationLoss(nn.Module):
         # always compute classification loss
         cls_loss = self.cls_loss(predictions, targets)
 
-        # segmentation loss (only if lesion exists). this should help the model to focus on segmenting
+        # segmentation loss (only if lesion exists). this should help the models to focus on segmenting
         # slices that actually contain lesions
         seg_loss = torch.tensor(0.0, requires_grad=True, device=predictions.device)
-        slices_with_lesions = get_slices_with_lesions(targets)
 
-        if predictions.ndim == 5:
-            predictions = predictions[:, :, slices_with_lesions]
-            targets = targets[:, :, slices_with_lesions]
-        else:
-            predictions = predictions[:, :, :, slices_with_lesions]
-            targets = targets[:, :, :, slices_with_lesions]
+        predictions, targets = filter_sick_slices_per_volume(predictions, targets)
 
-        if slices_with_lesions.any():
+        if predictions.shape[0] > 0:
             if self.seg_loss.__class__.__name__ == "ICILoss":
                 predictions = einops.rearrange(predictions, "B N D H W -> B N H W D")
                 targets = einops.rearrange(targets, "B N D H W -> B N H W D")
@@ -863,7 +856,8 @@ class SegmentationLoss(nn.Module):
             seg_loss = self.seg_loss(predictions, targets)
 
             if self.seg_loss.__class__.__name__ == "ICILoss":
-                seg_loss = seg_loss[0] * self.ici_weights[0] + seg_loss[1] * self.ici_weights[1] + seg_loss[2] * self.ici_weights[2]
+                seg_loss = seg_loss[0] * self.ici_weights[0] + seg_loss[1] * self.ici_weights[1] + seg_loss[2] * \
+                           self.ici_weights[2]
 
         total_loss = self.loss_weights[0] * seg_loss + self.loss_weights[1] * cls_loss
 

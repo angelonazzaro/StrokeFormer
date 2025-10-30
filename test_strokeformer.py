@@ -14,8 +14,8 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from constants import LESION_SIZES
-from dataset import MRIDataModule
-from model import StrokeFormer
+from dataset import SegmentationDataModule
+from models import StrokeFormer
 from utils import generate_overlayed_slice, get_lesion_size_category, build_metrics, compute_metrics, slice_wise_fp_fn
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def test(args):
     if len(args.masks) == 1 and os.path.isdir(args.masks[0]):
         args.masks = args.masks[0]
 
-    datamodule = MRIDataModule(
+    datamodule = SegmentationDataModule(
         paths={"test": {"scans": args.scans, "masks": args.masks}},
         batch_size=args.batch_size,
         overlap=None,
