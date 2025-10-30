@@ -116,7 +116,7 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  seg_loss: ICILoss
+  seg_loss: BinaryDiceLoss
   seg_loss_config:
     num_classes: 2
   cls_loss: BCEWithLogitsLoss

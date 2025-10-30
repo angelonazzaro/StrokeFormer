@@ -31,11 +31,10 @@ class LogReconstructionPredictionCallback(Callback):
 
         pl_module.eval()
         with torch.no_grad():
-            outputs = pl_module.diffusion_model.forward_backward(pl_module.ema, self.scan.unsqueeze(0), see_whole_sequence="whole")
+            recons = pl_module.diffusion_model.forward_backward(pl_module.ema, self.scan.unsqueeze(0), see_whole_sequence="whole")
 
         pl_module.train()
 
-        recons = outputs["recons"]
         fig, ax = plt.subplots()
 
         imgs = [[ax.imshow(gridify_output(x, 5), animated=True)] for x in recons]
