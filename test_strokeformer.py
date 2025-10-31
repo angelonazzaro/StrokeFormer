@@ -3,6 +3,7 @@ import logging
 import os
 from argparse import ArgumentParser
 from collections import defaultdict
+from functools import partial
 
 import einops
 import torch
@@ -16,7 +17,7 @@ from tqdm import tqdm
 from constants import LESION_SIZES
 from dataset import SegmentationDataModule
 from models import StrokeFormer
-from utils import generate_overlayed_slice, get_lesion_size_category, build_metrics, compute_metrics, slice_wise_fp_fn
+from utils import build_metrics, get_per_slice_segmentation_preds, convert_to_rgb
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -55,13 +56,11 @@ class SemanticSegmentationTarget:
 def test(args):
     logger.info("=== Starting test evaluation ===")
 
-    logger.info(f"Loading model checkpoint from {args.ckpt_path}")
     model = StrokeFormer.load_from_checkpoint(args.ckpt_path)
     model.eval()
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-
     model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
-    logger.info(f"Using model name: {model_name}")
+
+    logger.info(f"Loading model {model_name} from {args.ckpt_path}")
 
     cam_model = None
     if args.target_layers:
@@ -84,23 +83,13 @@ def test(args):
         batch_size=args.batch_size,
         overlap=None,
         num_workers=args.num_workers,
-        num_classes=args.num_classes,
     )
+
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
     logger.info(f"Loaded test dataloader: {len(dataloader.dataset)} volumes")
 
-    os.makedirs(args.scores_dir, exist_ok=True)
-    model_prediction_dir = os.path.join(args.scores_dir, model_name, "predictions")
-
-    os.makedirs(model_prediction_dir, exist_ok=True)
-
-    logger.info(f"Predictions will be saved to {model_prediction_dir}")
-
-    per_size_scores = {size: defaultdict(lambda: {"sum": 0.0, "count": 0}) for size in LESION_SIZES}
-    global_scores = defaultdict(lambda: {"sum": 0.0, "count": 0})
-
-    roi_size = (args.subvolume_dim, *args.resize_to) if args.resize_to else (args.subvolume_dim, *args.scan_dim[3:])
+    roi_size = (args.subvolume_depth, *args.resize_to) if args.resize_to else (args.subvolume_depth, *args.scan_dim[2:])
     inferer = SlidingWindowInferer(
         roi_size=roi_size,
         sw_batch_size=args.batch_size,
@@ -109,93 +98,102 @@ def test(args):
         mode="gaussian"
     )
 
-    metrics_fns = build_metrics(num_classes=args.num_classes)
+    inferer = partial(inferer, network=model)
+
+    metrics = build_metrics(num_classes=args.num_classes)
 
     logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
+    logger.info("=== Starting inference over test set ===")
 
-    logger.info("Starting inference over test set...")
+    # scores as saved as cumulative average (CA)
+    # structure is:
+    # - size:
+    #   - metric:
+    #       - ca: 0.0
+    #         n: 0.0
+    per_size_scores = {}
+    for size in LESION_SIZES:
+        per_size_scores[size] = {}
+        for metric_name in metrics.keys():
+            per_size_scores[size][metric_name] = {
+                "ca": 0.0,
+                "n": 0,
+            }
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Sliding window inference")):
-        scans, masks = batch
-        scans, masks = scans.to(model.device), masks.to(model.device)
+    os.makedirs(args.scores_dir, exist_ok=True)
+    model_prediction_dir = os.path.join(args.scores_dir, model_name, "predictions")
 
-        with torch.no_grad():
-            preds = inferer(scans, model)
+    os.makedirs(model_prediction_dir, exist_ok=True)
 
-        grayscale_cam = torch.zeros_like(preds[0])
+    logger.info(f"Predictions will be saved to {model_prediction_dir}")
 
-        if cam_model is not None:
+    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Segmenting lesions")):
+        scans, masks, means, stds = batch["scans"], batch["masks"], batch["means"], batch["stds"]
+        scans, masks = scans.to(device=model.device), masks.to(device=model.device)
+        means, stds = means.to(device=model.device), stds.to(device=model.device)
+
+        preds_until_now = batch_idx * scans.shape[0]
+        grayscale_cam = torch.zeros_like(scans[0], device=model.device)
+
+        if cam_model is not None and args.n_predictions > preds_until_now:
             targets = [SemanticSegmentationTarget(mask) for mask in masks]
             grayscale_cam = cam_model(scans, targets, eigen_smooth=False)  # noqa
-            grayscale_cam = torch.from_numpy(grayscale_cam)
-            del targets
+            grayscale_cam = grayscale_cam  # (B, D, H, W)
 
-        predictions_until_now = batch_idx * args.batch_size
-        for i in range(preds.shape[0]):
-            if args.n_predictions > predictions_until_now:
-                pred_dir = os.path.join(model_prediction_dir, f"scan_{predictions_until_now + i}")  # noqa
-                os.makedirs(pred_dir, exist_ok=True)
+        for result in get_per_slice_segmentation_preds(inferer, scans, masks, metrics, means, stds):
+            ground_truth = torch.from_numpy(result["ground_truth"]).to(device=model.device)  # (H, W, C)
+            prediction = torch.from_numpy(result["prediction"]).to(device=model.device)
 
-            for slice_idx in range(preds.shape[-3]):
-                scan_slice = scans[i][0, slice_idx]  # [B, C, D, H, W]
-                mask_slice = masks[i][:, slice_idx]  # [B, N, D, H, W] -> [N, H, W]
-                pred_slice = preds[i][:, slice_idx]  # [B, N, D, H, W] -> [N, H, W]
+            ground_truth = einops.rearrange(ground_truth, "h w c -> c h w")
+            prediction = einops.rearrange(prediction, "h w c -> c h w")
 
-                # compute per size metrics
-                lesion_size = get_lesion_size_category(mask_slice)
+            lesion_size = result["lesion_size"]
+            scores = result["scores"]
 
-                metrics_fns["dice"].keywords["include_background"] = lesion_size == 'No Lesion'
+            # CA update rule: (x_n+1 + n * CA_n) / (n + 1)
+            for metric_name in metrics.keys():
+                curr_ca = per_size_scores[lesion_size][metric_name]["ca"]
+                curr_n = per_size_scores[lesion_size][metric_name]["n"]
+                per_size_scores[lesion_size][metric_name] = {
+                    "ca": (scores[metric_name] + (curr_n * curr_ca) / (curr_n + 1)),
+                    "n": curr_n + 1
+                }
 
-                scores = compute_metrics(pred_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics_fns)
+            if args.n_predictions > preds_until_now:
+                images = [ground_truth, prediction]
+                scan_idx = result["scan_idx"]
+                slice_idx = result["slice_idx"]
 
-                # one-hot to 2D
-                mask_slice = torch.argmax(mask_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
-                pred_slice = torch.argmax(pred_slice, dim=0).to(dtype=torch.uint8)  # shape: (H, W)
+                if cam_model is not None:
+                    scan_slice = scans[scan_idx][:, slice_idx]
+                    scan_slice = convert_to_rgb(scan_slice) / 255
+                    cam_slice = grayscale_cam[scan_idx, slice_idx]
+                    cam_overlay = show_cam_on_image(scan_slice, cam_slice, use_rgb=True)
+                    cam_overlay = torch.from_numpy(cam_overlay).to(device=model.device)
+                    cam_overlay = einops.rearrange(cam_overlay, "h w c -> c h w")
+                    images.append(cam_overlay)
 
-                tp_fp_dict = slice_wise_fp_fn(pred_slice, mask_slice)
-                scores = {**scores, **tp_fp_dict}
+                grid = make_grid(images, padding=4, pad_value=255, nrow=len(images))
+                grid = to_pil_image(grid)
+                lesion_size = lesion_size.replace(" ", "_")
+                preds_dir = os.path.join(model_prediction_dir, f"scan_{preds_until_now + scan_idx}")  # noqa
+                os.makedirs(preds_dir, exist_ok=True)
+                grid.save(os.path.join(preds_dir, f"{lesion_size}_{slice_idx}.png"))  # noqa
 
-                gt, scan_slice, _ = generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0),
-                                                             return_tensor=True, return_rgbs=True)
-                pd = generate_overlayed_slice(scan_slice, pred_slice, color=(255, 0, 0), return_tensor=True)
+            torch.cuda.empty_cache()
 
-                for metric_name, value in scores.items():
-                    per_size_scores[lesion_size][metric_name]["sum"] += value
-                    per_size_scores[lesion_size][metric_name]["count"] += 1
-                    # exclude from global metrics as free-lesion slices are in majority and could push
-                    # the overall scores much higher than they actually are
-                    if lesion_size != "No Lesion":
-                        global_scores[metric_name]["sum"] += value
-                        global_scores[metric_name]["count"] += 1
+    logger.info("Inference complete. Aggregating metrics...")
+    global_metrics = defaultdict(float)
 
-                if args.n_predictions > predictions_until_now:
-                    images = [gt, pd]
+    for size in per_size_scores.keys():
+        for metric_name in metrics.keys():
+            # do not include healthy slices
+            if size != "No Lesion":
+                global_metrics[metric_name] += per_size_scores[size][metric_name]["ca"]
 
-                    if cam_model is not None:
-                        cam_overlay = torch.from_numpy(show_cam_on_image(scan_slice / 255, grayscale_cam[i, slice_idx], use_rgb=True))
-                        cam_overlay = einops.rearrange(cam_overlay, "h w c -> c h w")
-                        images.append(cam_overlay)
+    for metric_name, metric_value in global_metrics.items():
+        global_metrics[metric_name] = round(metric_value / (len(per_size_scores.keys()) - 1), 4)
 
-                    grid = make_grid(images, padding=4, pad_value=255, nrow=len(images))
-                    to_pil_image(grid).save(os.path.join(pred_dir, f"{lesion_size.replace(' ', '_')}_{predictions_until_now + i}_{slice_idx}.png"))  # noqa
-                    del grid
-
-                    if cam_model is not None:
-                        del cam_overlay
-
-                # free memory
-                del gt, pd, scan_slice, mask_slice, pred_slice
-                torch.cuda.empty_cache()
-
-    logger.info("Inference complete. Computing metrics...")
-
-    local_metrics = {}
-    for size, metric_dict in per_size_scores.items():
-        local_metrics[size] = {metric: (values["sum"] / values["count"] if values["count"] > 0 else 0.0)
-                               for metric, values in metric_dict.items()}
-
-    global_metrics = {metric: round(values["sum"] / values["count"], 4) if values["count"] > 0 else 0.0
-                      for metric, values in global_scores.items()}
     global_metrics = {"model_name": model_name, **global_metrics}
 
     scores_path = os.path.join(args.scores_dir, args.scores_file)
@@ -203,6 +201,7 @@ def test(args):
 
     logger.info(f"Writing global metrics to: {scores_path}")
     file_exists = os.path.exists(scores_path)
+
     with open(scores_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=global_metrics.keys())
         if not file_exists:
@@ -211,12 +210,13 @@ def test(args):
 
     logger.info(f"Writing per-size metrics to: {per_size_path}")
     file_exists = os.path.exists(per_size_path)
+
     with open(per_size_path, "a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["model_name", "size"] + list(next(iter(local_metrics.values())).keys()))
-        for size, metric_dict in local_metrics.items():
-            row = [model_name, size] + [round(v, 4) for v in metric_dict.values()]
+            writer.writerow(["model_name", "size"] + list(next(iter(per_size_scores.values())).keys()))
+        for size, metric_dict in per_size_scores.items():
+            row = [model_name, size] + [round(v["ca"], 4) for v in metric_dict.values()]
             writer.writerow(row)
 
     logger.info(f"=== Test evaluation completed ===")
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scans", type=str, required=True, nargs="+")
     parser.add_argument("--masks", type=str, default=None, nargs="+")
-    parser.add_argument("--subvolume_dim", type=int, default=189)
+    parser.add_argument("--subvolume_depth", type=int, default=189)
     parser.add_argument("--overlap", type=float, default=0.5)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=0)
