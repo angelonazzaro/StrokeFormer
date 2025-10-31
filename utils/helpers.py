@@ -1,73 +1,62 @@
 import math
-from typing import Optional, Tuple, List, Union
+from typing import Union, List, Optional
 
 import einops
+import nibabel as nib
 import numpy as np
 import torch
+import torchvision
+from torch import Tensor
 from torchvision.transforms.v2.functional import to_pil_image
 
+from constants import HEAD_MASK_THRESHOLD
 
-def compute_head_mask(scan: Union[np.ndarray, torch.Tensor], threshold: float = 8.0) -> Union[np.ndarray, torch.Tensor]:
-    # Assumes scan tensor is intensity image, mask where intensity <= threshold
+
+def gridify_output(img, row_size=-1):
+    scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+    return torchvision.utils.make_grid(scale_img(img), nrow=row_size, pad_value=-1).cpu().data.permute(0, 2, 1).contiguous().permute(2, 1, 0)
+
+
+def compute_head_mask(scan: Union[np.ndarray, Tensor],
+                      threshold: float = HEAD_MASK_THRESHOLD) -> Union[np.ndarray, Tensor]:
     return scan > threshold
 
 
-def filter_sick_slices_per_volume(scans: torch.Tensor, masks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    # filter sick slices based only on the foreground channel
-    sick_targets = masks[:, 1].any(dim=(-2, -1))  # (B, D)
-    max_z = torch.max(sick_targets.sum(dim=-1)).item()
-
-    preds = []
-    tgts = []
-
-    if max_z > 0:
-        for i in range(scans.shape[0]):
-            sick_slices = sick_targets[i]
-            pred = scans[i][:, sick_slices]
-            tgt = masks[i][:, sick_slices]
-
-            if pred.shape[-3] == 0:
-                continue
-
-            # lost channel and/or class dim
-            if pred.ndim < scans.ndim - 1:
-                if masks.ndim == 5:
-                    # lost class dim
-                    _, N, _, H, W = scans.shape
-                    pred = pred.reshape(N, -1, H, W)
-                    tgt = tgt.reshape(N, -1, H, W)
-                else:
-                    _, C, N, _, H, W = scans.shape
-                    pred = pred.reshape(C, N, -1, H, W)
-                    tgt = tgt.reshape(C, N, -1, H, W)
-
-            pad_amount = max_z - pred.shape[-3]
-
-            if pad_amount > 0:
-                # b_W, a_W, b_H, a_H, b_D, a_D, ...
-                pad_width = (0, 0, 0, 0, 0, pad_amount, *((0, 0,) * (pred.ndim - 3)))
-                pred = torch.nn.functional.pad(pred, pad_width, value=0, mode='constant')
-                tgt = torch.nn.functional.pad(tgt, pad_width, value=0, mode='constant')
-
-            preds.append(pred)
-            tgts.append(tgt)
-
-    if len(preds) == 0:
-        return torch.tensor(preds), torch.tensor(tgts)
-
-    return torch.stack(preds, dim=0), torch.stack(tgts, dim=0)
+def round_half_up(num: float):
+    # round to the nearest integer, by excess
+    return math.floor(num + 0.5)
 
 
-def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_tensor: bool = False,
-                             return_rgbs: bool = False):
+def load_volume(volume_path: str):
+    if volume_path.endswith(".nii.gz"):
+        volume = nib.load(volume_path).get_fdata()
+    elif volume_path.endswith(".npy"):
+        volume = np.load(volume_path)
+    else:
+        raise ValueError(f"Extension not supported: {volume_path}")
+
+    return volume
+
+
+def convert_to_rgb(scan_slice: Union[np.ndarray, Tensor]):
     if scan_slice.min() < 0 or scan_slice.max() > 1:
-        # normalize scan as RGB conversion requires [0,1] range
+        # normalize between [0,1] for RGB conversion
         scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
 
-    scan_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
-    mask_slice = np.asarray(to_pil_image(mask_slice).convert("RGB"))
+    rgb_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
+    return rgb_slice
 
-    overlay = overlay_img(scan_slice, mask_slice, color=color)
+
+def generate_overlayed_slice(scan_slice: Union[np.ndarray, Tensor],
+                             mask_slice: Union[np.ndarray, Tensor],
+                             color: tuple[int, int, int] = (255, 0, 0),
+                             alpha: float = 0.5,
+                             return_tensor: bool = False,
+                             return_rgbs: bool = False):
+    scan_slice = convert_to_rgb(scan_slice)
+    mask_slice = convert_to_rgb(mask_slice)
+
+    overlay = overlay_img(scan_slice, mask_slice, color=color, alpha=alpha)
 
     if return_tensor:
         overlay = torch.from_numpy(overlay)
@@ -78,33 +67,12 @@ def generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0), return_t
     return overlay
 
 
-def get_lesion_size_category(mask: Union[torch.Tensor, np.ndarray], return_all: bool = False):
-    if isinstance(mask, torch.Tensor):
-        mask = torch.argmax(mask, dim=0)
-        mask = mask.cpu().numpy()
-
-    slice_area = mask.shape[-1] * mask.shape[-2]
-    lesion_voxels = np.sum(mask)
-    lesion_area = lesion_voxels / slice_area
-
-    if lesion_voxels == 0:
-        size_category = "No Lesion"
-    elif lesion_area <= 0.01:
-        size_category = "Small"
-    elif lesion_area <= 0.05:
-        size_category = "Medium"
-    else:
-        size_category = "Large"
-
-    if return_all:
-        return size_category, lesion_voxels, lesion_area
-
-    return size_category
-
-
-def overlay_img(scan: np.ndarray, mask: np.ndarray, color: tuple[int, int, int] = (255, 0, 0), alpha: float = 0.5):
-    assert (scan.ndim == 3 and mask.ndim == 3
-            and mask.shape[-1] == 3 and scan.shape[-1] == 3), "image and overlay must be RGB images"
+def overlay_img(scan: np.ndarray,
+                mask: np.ndarray,
+                color: tuple[int, int, int] = (255, 0, 0),
+                alpha: float = 0.5):
+    assert scan.ndim == 3 and mask.ndim == 3, "scan and mask must have the same shape"
+    assert scan.shape[-1] == 3 and mask.shape[-1] == 3, "scan and mask must be RGB images"
 
     scan = scan.copy()
     mask = mask.astype(bool).copy()
@@ -113,15 +81,47 @@ def overlay_img(scan: np.ndarray, mask: np.ndarray, color: tuple[int, int, int] 
     overlay[:, :] = color
 
     scan[mask] = (1 - alpha) * scan[mask] + alpha * overlay[mask]
+
     return scan.astype(np.uint8)
 
 
-def round_half_up(x):
-    return math.floor(x + 0.5)
+def get_lesion_size(scan: Union[np.ndarray, Tensor],
+                    mask: Union[np.ndarray, Tensor],
+                    threshold: float = HEAD_MASK_THRESHOLD,
+                    get_head_mask: bool = False,
+                    return_all: bool = False):
+    if get_head_mask:
+        scan = compute_head_mask(scan, threshold)  # consider only brain area in the scan
+
+    if isinstance(scan, Tensor):
+        scan = scan.cpu().numpy()
+
+    brain_area = np.sum(scan)
+
+    if isinstance(mask, Tensor):
+        # assuming mask is an index tensor of shape (C, H, W, D) or similar
+        mask = mask.cpu().numpy()
+
+    lesion_size = np.sum(mask)
+    lesion_area = np.nan_to_num(np.divide(lesion_size, brain_area), nan=0)
+
+    if lesion_area == 0:
+        lesion_size_str = "No Lesion"
+    elif lesion_area <= 0.01:
+        lesion_size_str = "Small"
+    elif lesion_area <= 0.05:
+        lesion_size_str = "Medium"
+    else:
+        lesion_size_str = "Large"
+
+    if return_all:
+        return lesion_size_str, lesion_size, lesion_area
+
+    return lesion_size_str
 
 
-def check_patch_dim(patch_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]],
-                    scan_dim: Tuple[Optional[int], int, int, int]):
+def check_patch_dim(patch_dim: Optional[tuple[Optional[int], Optional[int], Optional[int]]],
+                    scan_dim: tuple[Optional[int], int, int, int]):
     D, H, W = scan_dim[-3], scan_dim[-2], scan_dim[-1]
 
     patch_D, patch_H, patch_W = patch_dim or (None, None, None)
@@ -132,9 +132,9 @@ def check_patch_dim(patch_dim: Optional[Tuple[Optional[int], Optional[int], Opti
     return patch_D, patch_H, patch_W
 
 
-def extract_patches(scan: Union[torch.Tensor, np.ndarray],
-                    overlap: Optional[Union[float, Tuple[Optional[float], Optional[float], Optional[float]]]] = None,
-                    patch_dim: Optional[Tuple[Optional[int], Optional[int], Optional[int]]] = None,
+def extract_patches(scan: Union[Tensor, np.ndarray],
+                    overlap: Optional[Union[float, tuple[Optional[float], Optional[float], Optional[float]]]] = None,
+                    patch_dim: Optional[tuple[Optional[int], Optional[int], Optional[int]]] = None,
                     return_origins: bool = False):
     patches = []
     origins = []
@@ -173,7 +173,7 @@ def extract_patches(scan: Union[torch.Tensor, np.ndarray],
                     pad_height = patch_H - patch.shape[-2]
                     pad_width = patch_W - patch.shape[-1]
 
-                    if isinstance(patch, torch.Tensor):
+                    if isinstance(patch, Tensor):
                         # torch expects padding in the order: (W_left, W_right, H_left, H_right, D_left, D_right)
                         padding = (0, pad_width, 0, pad_height, 0, pad_depth)
 
@@ -199,8 +199,8 @@ def extract_patches(scan: Union[torch.Tensor, np.ndarray],
 
 def reconstruct_volume(
         patches: Union[torch.Tensor, List[np.ndarray]],
-        scan_dim: Tuple[Optional[int], int, int, int],
-        origins: List[Tuple[int, int, int]],
+        scan_dim: tuple[Optional[int], int, int, int],
+        origins: List[tuple[int, int, int]],
         to_tensor: bool = True) -> Union[np.ndarray, torch.Tensor]:
     if isinstance(patches, torch.Tensor) and patches.ndim == 6:
         # multi-scan case (list of lists)
