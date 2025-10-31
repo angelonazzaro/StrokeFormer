@@ -117,10 +117,10 @@ trainer:
   model_registry: null
 model:
   seg_loss: BinaryDiceLoss
-  seg_loss_config:
+  seg_loss_cfg:
     num_classes: 2
   cls_loss: BCEWithLogitsLoss
-  cls_loss_config: null
+  cls_loss_cfg: null
   loss_weights:
   - 0.75
   - 0.25
@@ -130,8 +130,9 @@ model:
   - 0.9
   - 0.999
   eps: 1.0e-08
-  lr: 0.0006608856713267737
-  init_lr: 2.368312398178715e-05
+  opt_lr: 3e-5
+  warmup_lr: 4e-4
+  max_lr: 4e-6
   warmup_steps: 8
   lr_scheduler_interval: epoch
   weight_decay: 0.0006480380780002768
@@ -143,20 +144,13 @@ data:
     val:
       masks: data/ATLAS_2/Processed/Splits/Val/Masks
       scans: data/ATLAS_2/Processed/Splits/Val/Scans
-  num_classes: 2
   ext: .npy
-  scan_dim:
-  - 1
-  - 189
-  - 192
-  - 192
-  subvolume_dim: 128
+  subvolume_depth: 128
   overlap: 0.5
   resize_to:
   - 128
   - 128
   transforms: null
-  augment: false
   batch_size: 8
   num_workers: 0
 optimizer: null
