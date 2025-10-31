@@ -14,6 +14,8 @@ from numba import njit, prange
 class Simplex_CLASS:
 
     def __init__(self):
+        self._perm_grad_index3 = None
+        self._perm = None
         self.newSeed()
 
     def newSeed(self, seed=None):

@@ -1,1 +1,1 @@
-from .losses import BinaryDiceLoss, ICILoss
+from .losses import SegmentationLoss, BinaryDiceLoss, ICILoss
