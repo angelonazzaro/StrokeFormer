@@ -27,15 +27,6 @@ logging.basicConfig(
 )
 
 
-class SegmentationModelOutputWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super(SegmentationModelOutputWrapper, self).__init__()
-        self.model = model
-
-    def forward(self, x):
-        return self.model(x)
-
-
 class SemanticSegmentationTarget:
     def __init__(self, mask):
         if isinstance(mask, torch.Tensor):
@@ -47,9 +38,6 @@ class SemanticSegmentationTarget:
             self.mask = self.mask.cuda()
 
     def __call__(self, model_output):
-        if model_output.shape[-3] != self.mask.shape[-3]:
-            self.mask = torch.nn.functional.pad(self.mask,
-                                                (0, 0, 0, 0, 0, model_output.shape[-3] - self.mask.shape[-3]))
         return (model_output * self.mask).sum()
 
 
@@ -57,6 +45,8 @@ def test(args):
     logger.info("=== Starting test evaluation ===")
 
     model = StrokeFormer.load_from_checkpoint(args.ckpt_path)
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.cudnn.benchmark else "cpu"
+    model = model.to(device=device)
     model.eval()
     model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
 

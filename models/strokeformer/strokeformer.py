@@ -50,12 +50,16 @@ class StrokeFormer(LightningModule):
         self.save_hyperparameters()
 
     def forward(self, x: Tensor, return_preds: bool = False, return_dict: bool = False) -> Union[Tensor, dict]:
-        logits = self.model(x)  # (B, N, C, D, H, W)
+        logits = self.model(x)  # (B, N, D, H, W)
+        logits = logits.view(logits.shape[0], logits.shape[1], x.shape[1], *logits.shape[2:])  # (B, N, C, D, H, W)
+
+        if logits.shape[-3] != x.shape[-3]:
+            # segformer padded the depth dimension to output a cubic tensor
+            logits = logits[:, :, :, :x.shape[-3]]
 
         preds = logits.softmax(dim=1)
-        preds = preds.argmax(dim=1)
-        # same shape as x (B, C, D, H, W), cast to x.dtype is necessary for MONAI inferer
-        preds = preds.view(preds.shape[0], x.shape[1], *preds.shape[1:]).to(dtype=x.dtype)
+        # cast to x.dtype is necessary for MONAI inferer
+        preds = preds.argmax(dim=1).to(dtype=x.dtype)
 
         if return_preds:
             return preds
@@ -75,7 +79,7 @@ class StrokeFormer(LightningModule):
             masks = f.one_hot(masks, num_classes=self.num_classes).to(dtype=scans.dtype)
             masks = einops.rearrange(masks, "b c d h w n -> b n c d h w")
 
-        loss_dict = self.loss(logits, masks.squeeze(2), prefix=prefix, return_dict=True)
+        loss_dict = self.loss(logits, masks, prefix=prefix, return_dict=True)
 
         # convert masks back to index tensors
         masks = masks.argmax(dim=1)

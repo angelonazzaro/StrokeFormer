@@ -95,12 +95,12 @@ def filter_sick_slices_per_volume(
     B = scans.shape[0]
 
     if input_format == "one-hot":
-        # one-hot format: mask shape (B, C, D, H, W)
+        # one-hot format: mask shape (B, N, C, D, H, W)
         # foreground assumed to be at channel index 1
-        if masks.ndim == 5:
+        if masks.ndim == 6:
             fg_sick = masks[:, 1].any(dim=(-2, -1))  # (B, D)
         else:
-            raise ValueError("One-hot input should have 5 dims (B, C, D, H, W)")
+            raise ValueError("One-hot input should have 6 dims (B, N, C, D, H, W)")
     elif input_format == "index":
         # index format: mask shape (B, D, H, W) or (B, 1, D, H, W)
         # foreground = non-zero voxels
