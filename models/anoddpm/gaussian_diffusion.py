@@ -3,8 +3,8 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
-from .helpers import *
 from .simplex import Simplex_CLASS
 
 

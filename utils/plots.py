@@ -1,14 +1,13 @@
 import math
-from typing import List
+from typing import List, Optional
 
 import cv2
 import matplotlib.pyplot as plt
-import nibabel as nib
 import numpy as np
 from tqdm import tqdm
 
 from constants import LESION_SIZES
-from .helpers import get_lesion_size_category
+from .helpers import get_lesion_size, load_volume, compute_head_mask
 
 
 def plot_mri_slices(mri_volume, figsize=(14, 14)):
@@ -39,94 +38,116 @@ def plot_mri_slices(mri_volume, figsize=(14, 14)):
     plt.show()
 
 
-def plot_fold_distribution(fold_masks_paths, title):
-    fold_metadata = get_lesion_distribution_metadata(fold_masks_paths)
-    counts = [fold_metadata[size]["count"] for size in LESION_SIZES]
-    plot_lesion_size_distribution(counts, LESION_SIZES, title=title)
+def get_lesion_size_distribution(scans_filepaths: List[str],
+                                 masks_filepaths: List[str],
+                                 labels: List[str] = LESION_SIZES):
+    metadata = get_lesion_size_distribution_metadata(scans_filepaths, masks_filepaths, labels)
+    per_size_counts = [len(metadata[size]["lesion_areas"]) for size in labels]
+    total = np.sum(per_size_counts)
 
-
-def get_lesion_distribution_metadata(masks_filepaths: List[str], labels: List[str] = LESION_SIZES,
-                                     return_masks: bool = False):
-    metadata = {
-        "patients_count": 0,
-        "lesions_per_patient": [],
-        "tot_voxels": 0,
-        "lesion_voxels": 0,
-        "tot_slices": 0,
-        "slices_without_lesions": 0,
-        "slices_with_lesions": 0,
-    }
-
-    for size in labels:
-        metadata[size] = {
-            "lesion_area": [],
-            "count": 0,
-            "filepaths": []
-        }
-
-    masks = [nib.load(filepath).get_fdata().astype(np.uint8) if filepath.endswith(".nii.gz") \
-                 else np.load(filepath).astype(np.uint8) for filepath in tqdm(masks_filepaths, desc="Loading masks")]
-
-    for i, mask in tqdm(enumerate(masks), desc="Getting lesion distribution metadata"):
-        tot_voxels = mask.size
-
-        slices_with_lesions = mask.any(axis=(0, 1))
-
-        metadata["patients_count"] += 1
-        metadata["tot_voxels"] += tot_voxels
-        metadata["slices_without_lesions"] += np.sum(~slices_with_lesions)
-        metadata["slices_with_lesions"] += np.sum(slices_with_lesions)
-
-        lesions_per_patient = 0
-        for slice_idx in range(mask.shape[-1]):
-            slice_mask = mask[0, ..., slice_idx]
-            category, lesion_voxels, lesion_area = get_lesion_size_category(slice_mask, return_all=True)
-            metadata["lesion_voxels"] += lesion_voxels
-            metadata[category]["lesion_area"].append(lesion_area)
-            metadata[category]["count"] += 1
-            metadata[category]["filepaths"].append((masks_filepaths[i], slice_idx))
-
-            _, thresh = cv2.threshold(slice_mask, 0, 1, cv2.THRESH_BINARY)
-            num_lesions, _, _, _ = cv2.connectedComponentsWithStats(thresh, 4, cv2.CV_32S)
-
-            lesions_per_patient += num_lesions - 1  # exclude background region
-
-        metadata["lesions_per_patient"].append(lesions_per_patient)
-
-    if return_masks:
-        return metadata, masks
-
-    return metadata
-
-
-def plot_lesion_size_distribution(counts, labels, figsize=(8, 6), title=None, plot=True, return_distribution=False):
-    assert len(counts) == len(labels), "counts and labels must have same length"
-
-    items = zip(counts, labels)
+    # sort in descending order
+    items = zip(per_size_counts, labels)
     sorted_items = sorted(items, key=lambda x: x[0], reverse=True)
-    counts, labels = zip(*sorted_items)
 
+    distribution = {}
+
+    for (count, label) in sorted_items:
+        percentage = count * 100 / total
+        distribution[label] = {"percentage": percentage, "count": count}
+    
+    return distribution
+
+
+def plot_lesion_size_distribution(scans_filepaths: List[str],
+                                  masks_filepaths: List[str],
+                                  labels: List[str] = LESION_SIZES,
+                                  figsize: tuple[int, int] = (10, 6),
+                                  title: Optional[str] = None):
+    distribution = get_lesion_size_distribution(scans_filepaths, masks_filepaths, labels)
     colors = plt.cm.tab20.colors[:len(labels)]
-    total = np.sum(counts)
 
     plt.figure(figsize=figsize)
-    plt.bar(labels, counts, color=colors)
-    distributions = {}
+    labels, percentages, counts = [], [], []
+    
+    for label in distribution.keys():
+        labels.append(label)
+        percentages.append(distribution[label]["percentage"])
+        percentages.append(distribution[label]["count"])
 
-    for i, v in enumerate(counts):
-        p = v * 100 / total
-        distributions[labels[i]] = p
-        plt.text(i, v + 7.5, f"{p:.2f}%", ha="center")
+    plt.bar(labels, percentages, colors=colors)
 
-    if plot:
-        plt.ylabel("Slices Without Lesions")
-        plt.xlabel("Lesion Size Categories")
-        plt.xticks(rotation=45)
-        if title is None:
-            title = "Lesion Size Distribution Across Slices"
-        plt.title(title)
-        plt.show()
+    for i in range(len(percentages)):
+        plt.text(i, counts[i] + 7.5, f"{percentages[i]:.2f}%", ha="center")
 
-    if return_distribution:
-        return distributions
-    return None
+    plt.ylabel("Counts")
+    plt.xlabel("Lesion Sizes")
+
+    if title is None:
+        title = "Lesion Sizes Distribution"
+
+    plt.title(title)
+    plt.show()
+
+
+def get_lesion_size_distribution_metadata(scans_filepaths: List[str],
+                                          masks_filepaths: List[str],
+                                          labels: List[str] = LESION_SIZES):
+    """
+        Get lesion size distribution data.
+
+        Extract from masks and scans:
+            - Distribution of lesion sizes across slices
+            - Number of sick pixels
+            - Number of healthy pixels
+            - Number of lesions per patient
+            - Number of sick slices
+            - Number of healthy slices
+    """
+
+    metadata = {
+        "sick_voxels": 0,
+        "healthy_voxels": 0,
+        "sick_slices_num": 0,
+        "healthy_slices_num": 0,
+        "num_lesions_per_patient": [],
+    }
+
+    for label in labels:
+        metadata[label] = {  # noqa
+            "lesion_areas": [],
+            "filepaths": [],  # (scan path, mask path, slice idx)
+        }
+
+    for i in tqdm(range(len(masks_filepaths)), desc="Retrieving lesion size distribution data"):
+        # shape is (1, H, W, D)
+        scan = load_volume(scans_filepaths[i])
+        mask = load_volume(masks_filepaths[i]).astype(np.uint8)
+        head_mask = compute_head_mask(scan)
+        num_lesions_per_patient = 0
+
+        for slice_idx in range(mask.shape[-1]):
+            mask_slice = mask[..., slice_idx]
+            scan_slice = head_mask[..., slice_idx]
+
+            lesion_size_str, lesion_size, lesion_area = get_lesion_size(scan_slice, mask_slice, return_all=True)
+            metadata[lesion_size_str]["lesion_areas"].append(lesion_area)  # noqa
+            metadata[lesion_size_str]["filepaths"].append((scans_filepaths[i], masks_filepaths[i], slice_idx))  # noqa
+
+            if lesion_size_str != "No Lesion":
+                metadata["sick_voxels"] += lesion_size
+                metadata["sick_slices_num"] += 1
+
+                # get number of lesions/connected components
+                _, thresh = cv2.threshold(mask_slice, 0, 1, cv2.THRESH_BINARY)
+                num_lesions, _, _, _ = cv2.connectedComponentsWithStats(thresh, 4, cv2.CV_32S)  # noqa
+                # connectedComponentsWithStats counts also the background as a connected component so
+                # the number of lesion must be decremented by one
+                num_lesions -= 1
+                num_lesions_per_patient += num_lesions
+            else:
+                metadata["healthy_voxels"] += np.sum(scan_slice)
+                metadata["healthy_slices_num"] += 1
+
+        metadata["num_lesions_per_patient"].append(num_lesions_per_patient)
+
+    return metadata

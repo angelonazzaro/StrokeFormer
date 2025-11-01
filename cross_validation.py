@@ -1,22 +1,24 @@
 import json
 import logging
-import os
 import random
 import subprocess
+import os
+
 from argparse import ArgumentParser
 from glob import glob
 
 import pandas as pd
+import wandb
+
 from lightning import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-import wandb
-from callbacks import LogSegmentationPredictionCallback
-from constants import LESION_SIZES
-from dataset import SegmentationDataModule
+from callbacks import LogPrediction
 from models import StrokeFormer
-from utils import get_lesion_distribution_metadata, plot_lesion_size_distribution, round_half_up, plot_fold_distribution
+from dataset import SegmentationDataModule
+
+from utils import get_lesion_size_distribution_metadata, round_half_up, get_lesion_size_distribution
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,23 +34,22 @@ def main(args):
 
     logger.info("=" * 80)
     logger.info(f"Starting Cross-Validation with {args.k} folds - Model: {args.model_prefix}")
-    logger.info(f"Random seed set to {args.seed}")
-    logger.info("=" * 80)
 
     seed_everything(args.seed)
     random.seed(args.seed)
 
-    logger.info("Preparing dataset and computing lesion distributions...")
+    logger.info(f"Random seed set to {args.seed}")
+    logger.info("=" * 80)
 
-    masks_filepaths = sorted(glob(os.path.join(args.masks_dir, f"*T1lesion_mask{args.ext}"), recursive=True))
+    scans_filepaths = sorted(glob(os.path.join(args.scans_dir, f"*T1w*{args.ext}")), recursive=True) # noqa
+    masks_filepaths = sorted(glob(os.path.join(args.masks_dir, f"*T1lesion_masks*{args.ext}")), recursive=True) # noqa
 
-    metadata = get_lesion_distribution_metadata(masks_filepaths)
-    counts_across_slices = [metadata[size]["count"] for size in LESION_SIZES]
+    sizes_distribution = get_lesion_size_distribution(scans_filepaths, masks_filepaths)
+    sizes_distribution = {size: sizes_distribution[size]["percentage"] for size in sizes_distribution.keys()}
+    sizes_distribution_metadata = get_lesion_size_distribution_metadata(scans_filepaths, masks_filepaths)
 
-    size_distributions = plot_lesion_size_distribution(counts_across_slices, LESION_SIZES, plot=args.plot_distributions, return_distribution=True)
-
-    dataframe_data = [{"size": size, "filepath": fp[0]} for size in LESION_SIZES for fp in metadata[size]["filepaths"]]
-    df = pd.DataFrame(dataframe_data)
+    dataframe = [{"size": size, "filepath": fp[0]} for size in sizes_distribution.keys() for fp in sizes_distribution_metadata[size]["filepaths"]]
+    df = pd.DataFrame(dataframe)
 
     # compute volume-level distribution
     volume_dist = (
@@ -68,21 +69,21 @@ def main(args):
     slices_per_fold = total_slices // args.k
 
     logger.info(f"Total scans: {len(volume_dist)}, Total slices: {total_slices}")
-    logger.info(f"Slices per fold: {slices_per_fold}")
 
     logger.info("Assigning scans to folds...")
 
     assigned = set()
     folds = []
 
+    # manually split the data into folds to approximately reach each lesion size threshold
     for fold_idx in range(args.k):
-        fold_target = {k: slices_per_fold * v // 100 for k, v in size_distributions.items()}
+        fold_target = {k: slices_per_fold * v // 100 for k, v in sizes_distribution.items()}
 
         for filepath, row in volume_dist.iterrows():
             if filepath in assigned:
                 continue
 
-            contrib = {k: row.get(k, 0) * args.scan_dim[-3] for k in size_distributions.keys()}
+            contrib = {k: row.get(k, 0) * args.scan_dim[-3] for k in sizes_distribution.keys()}
             if any(v > 0 for v in fold_target.values()):
                 folds.append(filepath)
                 assigned.add(filepath)
@@ -96,9 +97,9 @@ def main(args):
     logger.info(f"Fold distribution — Train: {args.splits[0]}%, Val: {args.splits[1]}%, Test: {args.splits[2]}%")
 
     for k in range(args.k):
-        logger.info("-" * 80)
+        logger.info("=" * 80)
         logger.info(f"[Fold {k + 1}/{args.k}] Starting training and evaluation")
-        logger.info("-" * 80)
+        logger.info("=" * 80)
 
         # sample test/val folds
         test_folds = random.sample(folds, k=n_test_folds)
@@ -111,16 +112,10 @@ def main(args):
         val_masks_paths = list(volume_dist.loc[val_folds].filepath)
         test_masks_paths = list(volume_dist.loc[test_folds].filepath)
 
-        # plot size distribution per set to make sure cross validation created folds of distribution equal
-        # to that of the dataset's
-        if args.plot_distributions:
-            plot_fold_distribution(train_masks_paths, title=f"Train set distribution - {k + 1}/{args.k}")
-            plot_fold_distribution(val_masks_paths, title=f"Val set distribution - {k + 1}/{args.k}")
-            plot_fold_distribution(test_masks_paths, title=f"Test set distribution - {k + 1}/{args.k}")
-
         def _make_paths(filepaths):
             masks = [fp for fp in filepaths]
-            scans = [fp.replace(args.masks_dir, args.scans_dir).replace("label-L_desc-T1lesion_mask", "T1w") for fp in filepaths]
+            scans = [fp.replace(args.masks_dir, args.scans_dir).replace("label-L_desc-T1lesion_mask", "T1w") for fp in
+                     filepaths]
 
             return {"scans": scans, "masks": masks}
 
@@ -129,43 +124,28 @@ def main(args):
                 "train": _make_paths(train_masks_paths),
                 "val": _make_paths(val_masks_paths),
             },
-            augment=args.augment,
             resize_to=args.resize_to,
-            subvolume_dim=args.subvolume_dim,
-            overlap=args.overlap,
-            transforms=args.transforms,
-            batch_size=args.batch_size,
             num_workers=args.num_workers,
-            num_classes=args.num_classes,
+            batch_size=args.batch_size,
+            overlap=args.overlap,
+            subvolume_depth=args.subvolume_depth,
+            transforms=args.transforms,
         )
 
-        logger.info("Instantiating models and callbacks...")
+        seg_loss_cfg = json.loads(args.seg_loss_cfg)
+        cls_loss_cfg = json.loads(args.cls_loss_cfg)
 
-        segmentation_loss_config = json.loads(args.segmentation_loss_config)
-        prediction_loss_config = json.loads(args.prediction_loss_config)
-
-        model = StrokeFormer(
-            segmentation_loss=args.segmentation_loss,
-            segmentation_loss_config=segmentation_loss_config,
-            prediction_loss=args.prediction_loss,
-            prediction_loss_config=prediction_loss_config,
-            loss_weights=args.loss_weights,
-            num_classes=args.num_classes,
-            in_channels=args.in_channels,
-            betas=args.betas,
-            lr=args.lr,
-            init_lr=args.init_lr,
-            warmup_steps=args.warmup_steps,
-            lr_scheduler_interval=args.lr_logging_interval,
-            weight_decay=args.weight_decay,
-        )
+        model = StrokeFormer(num_classes=args.num_classes, seg_loss=args.seg_loss,
+                             seg_loss_cfg=seg_loss_cfg, cls_loss=args.cls_loss,
+                             cls_loss_cfg=cls_loss_cfg, loss_weights=args.loss_weights,
+                             opt_lr=args.opt_lr, warmup_lr=args.warmup_lr, max_lr=args.max_lr,
+                             weight_decay=args.weight_decay, betas=args.beta, eps=args.eps,
+                             lr_scheduler_interval=args.lr_logging_interval,
+                             in_channels=args.in_channels)
 
         callbacks = [
-            LogSegmentationPredictionCallback(
-                num_images=args.num_images,
-                log_every_n_val_epochs=args.log_every_n_val_epochs,
-                slices_per_scan=args.slices_per_scan,
-            ),
+            LogPrediction(num_samples=args.num_samples,
+                          log_every_n_epochs=args.log_every_n_val_epochs, task="segmentation"),
             LearningRateMonitor(logging_interval=args.lr_logging_interval),
             EarlyStopping(
                 patience=args.patience,
@@ -197,16 +177,18 @@ def main(args):
             default_root_dir=args.default_root_dir,
         )
 
-        logger.info(f"[Fold {k + 1}/{args.k}] Training started...")
+        logger.info(f"[Fold {k + 1}/{args.k}] Starting Training...")
         trainer.fit(model, datamodule=datamodule)
         wandb.finish()
+        logger.info(f"[Fold {k + 1}/{args.k}] Training Ended...")
 
-        logger.info(f"[Fold {k + 1}/{args.k}] Testing started...")
+        logger.info(f"[Fold {k + 1}/{args.k}] Starting Testing...")
+
+        # get last model checkpoint from the current run
+        ckpt_dir = os.path.join(args.default_root_dir, trainer.logger.experiment.id, "checkpoints") # noqa
+        ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][-1] # noqa
 
         test_paths = _make_paths(test_masks_paths)
-
-        ckpt_dir = os.path.join(args.default_root_dir, trainer.logger.experiment.id, "checkpoints")
-        ckpt_path = [os.path.join(ckpt_dir, ckpt) for ckpt in os.listdir(ckpt_dir) if ckpt.endswith(".ckpt")][-1]
 
         cmd = [
             "python", "test_strokeformer.py",
@@ -216,7 +198,7 @@ def main(args):
             "--masks", *test_paths["masks"],
             "--ckpt_path", ckpt_path,
             "--model_name", f"{args.model_prefix}-{k + 1}-fold",
-            "--subvolume_dim", str(args.subvolume_dim),
+            "--subvolume_depth", str(args.subvolume_depth),
             "--scores_dir", "./cross_scores",
             "--scores_file", "cross_scores.csv",
             "--per_size_scores_file", "per_size_cross_scores.csv",
@@ -238,11 +220,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--k", type=int, default=5, help="Number of folds")
-    parser.add_argument("--splits", nargs=3, type=int, default=(60, 20, 20),
-                        help="Percentage split (train, val, test)")
-    parser.add_argument("--plot_distributions", action="store_true", default=False,
-                        help="Whether to plot distributions or not. If True, plot will need to be manually close "
-                             "before the script can continue")
+    parser.add_argument("--splits", nargs=3, type=int, default=(70, 10, 20), help="Percentage split (train, val, test)")
 
     # dataloader
     parser.add_argument("--scans_dir", type=str, required=True)
@@ -251,24 +229,23 @@ if __name__ == "__main__":
     parser.add_argument("--transforms", nargs="+", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--subvolume_dim", type=int, default=189)
+    parser.add_argument("--subvolume_depth", type=int, default=189)
     parser.add_argument("--overlap", type=float, default=0.5)
-    parser.add_argument("--scan_dim", nargs=4, type=int, default=(1, 189, 192, 192))
     parser.add_argument("--resize_to", nargs=2, type=int, default=None)
-    parser.add_argument("--augment", action="store_true")
 
     # models
     parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--in_channels", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=4e-4)
-    parser.add_argument("--init_lr", type=float, default=4e-6)
+    parser.add_argument("--opt_lr", type=float, default=3e-5)
+    parser.add_argument("--warmup_lr", type=float, default=4e-6)
+    parser.add_argument("--max_lr", type=float, default=4e-4)
     parser.add_argument("--warmup_steps", type=int, default=10)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
     parser.add_argument("--betas", nargs=2, type=float, default=(0.9, 0.999))
-    parser.add_argument("--segmentation_loss", type=str, default="DiceLoss")
-    parser.add_argument("--segmentation_loss_config", type=str, default="{}")
-    parser.add_argument("--prediction_loss", type=str, default="BCEWithLogitsLoss")
-    parser.add_argument("--prediction_loss_config", type=str, default="{}")
+    parser.add_argument("--seg_loss", type=str, default="ICILoss")
+    parser.add_argument("--seg_loss_cls", type=str, default="{}")
+    parser.add_argument("--cls_loss", type=str, default="BCEWithLogitsLoss")
+    parser.add_argument("--cls_loss_config", type=str, default="{}")
     parser.add_argument("--loss_weights", nargs=2, type=float, default=(0.5, 0.5))
 
     # training
@@ -281,9 +258,8 @@ if __name__ == "__main__":
     parser.add_argument("--patience", type=int, default=50)
     parser.add_argument("--min_delta", type=float, default=0.001)
     parser.add_argument("--lr_logging_interval", type=str, default="epoch", choices=["epoch", "step"])
-    parser.add_argument("--num_images", type=int, default=5)
+    parser.add_argument("--num_samples", type=int, default=5)
     parser.add_argument("--log_every_n_val_epochs", type=int, default=5)
-    parser.add_argument("--slices_per_scan", type=int, default=20)
     parser.add_argument("--model_prefix", type=str, required=True)
 
     # testing
@@ -292,5 +268,4 @@ if __name__ == "__main__":
     parser.add_argument("--scores_dir", help="Directory to save predictions and scores.", type=str, default="./scores")
     parser.add_argument("--scores_file", type=str, default="scores.csv")
 
-    args = parser.parse_args()
-    main(args)
+    main(parser.parse_args())

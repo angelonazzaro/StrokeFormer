@@ -1,6 +1,6 @@
 import sys
+from typing import Optional, Literal, Union, List
 from functools import partial
-from typing import Optional, Literal, Union
 
 import einops
 import monai.losses
@@ -482,16 +482,16 @@ class ICILoss(torch.nn.modules.loss._Loss):
                     # Create output max for the center of instance segmentation loss.
                     if self.spatial_dims == 3:
                         output_batch_centers[
-                        0, 0,  # batch, channel
-                        mins[0]:maxs[0],  # dim x
-                        mins[1]:maxs[1],  # dim y
-                        mins[2]:maxs[2],  # dim z
+                            0, 0,  # batch, channel
+                            mins[0]:maxs[0],  # dim x
+                            mins[1]:maxs[1],  # dim y
+                            mins[2]:maxs[2],  # dim z
                         ] = 1. + self.smoother
                     elif self.spatial_dims == 2:
                         output_batch_centers[
-                        0, 0,  # batch, channel
-                        mins[0]:maxs[0],  # dim x
-                        mins[1]:maxs[1],  # dim y
+                            0, 0,  # batch, channel
+                            mins[0]:maxs[0],  # dim x
+                            mins[1]:maxs[1],  # dim y
                         ] = 1. + self.smoother
 
                     # Find if there are label instances that intersect with the output instance.
@@ -628,16 +628,16 @@ class ICILoss(torch.nn.modules.loss._Loss):
                     # Create output max for the center of instance segmentation loss.
                     if self.spatial_dims == 3:
                         lbl_instance_centers[
-                        0, 0,  # batch, channel
-                        mins[0]:maxs[0],  # dim x
-                        mins[1]:maxs[1],  # dim y
-                        mins[2]:maxs[2],  # dim z
+                            0, 0,  # batch, channel
+                            mins[0]:maxs[0],  # dim x
+                            mins[1]:maxs[1],  # dim y
+                            mins[2]:maxs[2],  # dim z
                         ] = 1. + self.smoother
                     elif self.spatial_dims == 2:
                         lbl_instance_centers[
-                        0, 0,  # batch, channel
-                        mins[0]:maxs[0],  # dim x
-                        mins[1]:maxs[1],  # dim y
+                            0, 0,  # batch, channel
+                            mins[0]:maxs[0],  # dim x
+                            mins[1]:maxs[1],  # dim y
                         ] = 1. + self.smoother
 
                     # Create label mask for the label's instance only
@@ -786,26 +786,31 @@ class ICILoss(torch.nn.modules.loss._Loss):
 class SegmentationLoss(nn.Module):
     def __init__(self,
                  seg_loss: Optional[str] = "ICILoss",
-                 seg_loss_config: Optional[dict] = None,
+                 seg_loss_cfg: Optional[dict] = None,
                  cls_loss: str = "BCEWithLogitsLoss",
-                 cls_loss_config: Optional[dict] = None,
+                 cls_loss_cfg: Optional[dict] = None,
                  loss_weights: tuple[float, float] = (0.5, 0.5),
                  ici_weights: Optional[tuple[float, float, float]] = (0.25, 0.5, 0.25)):
         super().__init__()
 
-        for w in loss_weights:
-            if w < 0 or w > 1:
-                raise ValueError(f"Weights should be between 0 and 1, but got {w}")
+        def _check_weights(weights: List[float]):
+            weights_sum = 0
+            for w in weights:
+                if w < 0 or w > 1:
+                    raise ValueError(f"Weights should be between 0 and 1, but got {w}")
 
-        for w in ici_weights:
-            if w < 0 or w > 1:
-                raise ValueError(f"Weights should be between 0 and 1, but got {w}")
+                weights_sum += w
+                if weights_sum > 1.0:
+                    raise ValueError(f"Weights should add up to 1, got: {weights_sum}")
+
+        _check_weights(list(loss_weights))
+        _check_weights(list(ici_weights))
 
         if seg_loss == "ICILoss" or seg_loss is None:
             # overwrite seg_loss_config
             seg_loss = "ICILoss"
             dice_loss = monai.losses.DiceLoss(to_onehot_y=False, softmax=False, sigmoid=False)
-            seg_loss_config = {
+            seg_loss_cfg = {
                 "loss_function_pixel": dice_loss,
                 "loss_function_instance": dice_loss,
                 "loss_function_center": dice_loss,
@@ -814,9 +819,9 @@ class SegmentationLoss(nn.Module):
                 "activation": "sigmoid",
             }
 
-        self.seg_loss = instantiate_loss(seg_loss, seg_loss_config)
+        self.seg_loss = instantiate_loss(seg_loss, seg_loss_cfg)
 
-        self.cls_loss = instantiate_loss(cls_loss, cls_loss_config)
+        self.cls_loss = instantiate_loss(cls_loss, cls_loss_cfg)
         self.loss_weights = loss_weights
         self.ici_weights = ici_weights
 

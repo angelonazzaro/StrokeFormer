@@ -73,14 +73,14 @@ class AnoDDPM(LightningModule):
         return return_dict
 
     def _common_step(self, batch, batch_idx, prefix: Literal['train', 'val', 'test']):
-        if batch_idx > 1 and prefix == 'train':
+        if batch_idx > 0 and prefix == 'train':
             # making sure this is called after the first optimizer step
             update_ema_params(self.ema, self.unet)
 
         # run_backward = self.trainer.global_step % 100 == 0 and not self.trainer.sanity_checking
         run_backward = False
 
-        scans, head_masks, masks = batch
+        scans, head_masks, masks = batch["scans"], batch["head_masks"], batch["masks"]
 
         output_dict = self.forward(scans, head_masks, run_backward)
 
@@ -94,11 +94,9 @@ class AnoDDPM(LightningModule):
             mse = (masks - recons).square()
             mse = (mse > 0.5).float()
 
-            log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0),
-                                              metrics=self.metrics, prefix=prefix, task="reconstruction"))
+            log_dict.update(**compute_metrics(torch.cat([mse, recons], dim=0), torch.cat([masks, scans], dim=0), metrics=self.metrics, prefix=prefix, task="reconstruction")) # noqa
 
-        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True, rank_zero_only=True,
-                      sync_dist=True)
+        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True, rank_zero_only=True, sync_dist=True)
 
         return output_dict["loss"]
 
@@ -109,8 +107,7 @@ class AnoDDPM(LightningModule):
         return self._common_step(batch, batch_idx, prefix='val')
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.unet.parameters(), lr=self.lr, betas=self.betas,
-                                      weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(self.unet.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
 
         return {
             "optimizer": optimizer

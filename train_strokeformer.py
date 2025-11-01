@@ -2,13 +2,14 @@ import os
 import torch
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
 from dataset import SegmentationDataModule
 from models import StrokeFormer
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 class MyCLI(LightningCLI):
+    @rank_zero_only
     def after_instantiate_classes(self, **kwargs):
         model = self.model
         logger = self.trainer.logger
