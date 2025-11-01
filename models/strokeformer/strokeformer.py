@@ -1,5 +1,6 @@
 from typing import Literal, Optional, Union
 
+import einops
 import torch.nn.functional as f
 from lightning import LightningModule
 from torch import Tensor, optim
@@ -66,14 +67,15 @@ class StrokeFormer(LightningModule):
     def _common_step(self, batch, prefix: Literal["train", "val"]):
         scans, masks = batch["scans"], batch["masks"]  # (B, C, D, H, W)
 
-        logits = self.forward(scans, return_dict=True)  # (B, N, C, D, H, W)
+        logits = self.forward(scans, return_dict=True)  # (B, N, D, H, W)
         logits, preds = logits["logits"], logits["preds"]
 
         if masks.shape != logits.shape:
             # convert masks to one-hot format to match logits
             masks = f.one_hot(masks, num_classes=self.num_classes).to(dtype=scans.dtype)
+            masks = einops.rearrange(masks, "b c d h w n -> b n c d h w")
 
-        loss_dict = self.loss(logits, masks, prefix=prefix, return_dict=True)
+        loss_dict = self.loss(logits, masks.squeeze(2), prefix=prefix, return_dict=True)
 
         # convert masks back to index tensors
         masks = masks.argmax(dim=1)

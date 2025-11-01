@@ -19,7 +19,7 @@ class LogPrediction(Callback):
     def __init__(self,
                  log_every_n_epochs: int,
                  num_samples: int,
-                 task: Literal["segmentation", "reconstruction"]):
+                 task: Literal["segmentation", "reconstruction"] = "segmentation"):
         super().__init__()
 
         self.log_every_n_epochs = log_every_n_epochs

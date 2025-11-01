@@ -1,10 +1,11 @@
 import math
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Literal
 
 import einops
 import nibabel as nib
 import numpy as np
 import torch
+import torch.nn.functional as f
 import torchvision
 from torch import Tensor
 from torchvision.transforms.v2.functional import to_pil_image
@@ -83,6 +84,70 @@ def overlay_img(scan: np.ndarray,
     scan[mask] = (1 - alpha) * scan[mask] + alpha * overlay[mask]
 
     return scan.astype(np.uint8)
+
+
+def filter_sick_slices_per_volume(
+    scans: Tensor,
+    masks: Tensor,
+    input_format: Literal["one-hot", "index"] = "one-hot"
+) -> tuple[Tensor, Tensor]:
+
+    B = scans.shape[0]
+
+    if input_format == "one-hot":
+        # one-hot format: mask shape (B, C, D, H, W)
+        # foreground assumed to be at channel index 1
+        if masks.ndim == 5:
+            fg_sick = masks[:, 1].any(dim=(-2, -1))  # (B, D)
+        else:
+            raise ValueError("One-hot input should have 5 dims (B, C, D, H, W)")
+    elif input_format == "index":
+        # index format: mask shape (B, D, H, W) or (B, 1, D, H, W)
+        # foreground = non-zero voxels
+        if masks.ndim == 5:
+            fg_sick = masks[:, 0].bool().any(dim=(-2, -1))  # (B, D)
+        elif masks.ndim == 4:
+            fg_sick = masks.bool().any(dim=(-2, -1))  # (B, D)
+        else:
+            raise ValueError("Index input should have 4 or 5 dims")
+    else:
+        raise ValueError(f"Unknown input_format '{input_format}'. Use 'one-hot' or 'index'.")
+
+    max_sick_slices = fg_sick.sum(dim=1).max().item()
+    if max_sick_slices == 0:
+        return torch.empty((0, *scans.shape[1:]), device=scans.device), torch.empty((0, *masks.shape[1:]), device=masks.device)
+
+    preds = []
+    tgts = []
+
+    for b in range(B):
+        sick_idx = fg_sick[b].nonzero(as_tuple=False).squeeze(1)
+        if len(sick_idx) == 0:
+            continue
+
+        if scans.ndim == 5:  # (B, C, D, H, W)
+            pred_slices = scans[b][:, sick_idx, :, :]
+            tgt_slices = masks[b][:, sick_idx, :, :]
+        else:  # (B, D, H, W)
+            pred_slices = scans[b][sick_idx, :, :]
+            tgt_slices = masks[b][sick_idx, :, :]
+
+        current_slices = pred_slices.shape[-3]
+
+        if current_slices < max_sick_slices:
+            pad_amount = max_sick_slices - current_slices
+            pad_dims = pred_slices.ndim
+            pad = [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0, 0, 0] if pad_dims == 5 else [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0]
+            pred_slices = f.pad(pred_slices, pad, mode='constant', value=0)
+            tgt_slices = f.pad(tgt_slices, pad, mode='constant', value=0)
+
+        preds.append(pred_slices)
+        tgts.append(tgt_slices)
+
+    if len(preds) == 0:
+        return torch.empty((0, *scans.shape[1:]), device=scans.device), torch.empty((0, *masks.shape[1:]), device=masks.device)
+
+    return torch.stack(preds, dim=0), torch.stack(tgts, dim=0)
 
 
 def get_lesion_size(scan: Union[np.ndarray, Tensor],

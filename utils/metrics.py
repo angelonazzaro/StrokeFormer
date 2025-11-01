@@ -1,4 +1,3 @@
-from collections import defaultdict
 from functools import partial
 from typing import Literal, Optional
 
@@ -7,34 +6,40 @@ from torch import Tensor
 from torchmetrics.functional.segmentation import dice_score
 
 from constants import HEAD_MASK_THRESHOLD
-from utils import get_lesion_size, generate_overlayed_slice, compute_head_mask
+from utils import get_lesion_size, generate_overlayed_slice, compute_head_mask, filter_sick_slices_per_volume
 
 
 def compute_metrics(preds: Tensor,
                     targets: Tensor,
                     metrics: dict,
-                    prefix: Optional[Literal["train", "val"]] = None) -> dict:
+                    prefix: Optional[Literal["train", "val"]] = None,
+                    task: Literal["segmentation", "reconstruction"] = "segmentation") -> dict:
     prefix = f"{prefix}_" if prefix else ""
 
-    scores = defaultdict(float)
+    scores = {f"{prefix}{metric_name}": metric["default_value"] for metric_name, metric in metrics.items()}
     preds = preds.to(dtype=torch.long)
     targets = targets.to(dtype=torch.long)
 
-    for metric_name, metric_fn in metrics.items():
-        scores[prefix + metric_name] = torch.nan_to_num(metric_fn(preds, targets), nan=0.0).item()
+    preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
+
+    if preds.shape[0] > 0:
+        for metric_name, metric in metrics.items():
+            scores[prefix + metric_name] = torch.nan_to_num(metric["fn"](preds, targets), nan=metric["default_value"]).item()
 
     return scores
 
 
 def build_metrics(num_classes: int,
-                  average: Literal["micro", "macro", "weighted", "none"] = "macro"):
+                  average: Literal["micro", "macro", "weighted", "none"] = "macro",
+                  task: Literal["segmentation", "reconstruction"] = "segmentation"):
     return {
-        "dice": partial(dice_score,
-                        include_background=False,
-                        num_classes=num_classes,
-                        average=average,
-                        aggregation_level="global",
-                        input_format="index")
+        "dice": {"fn": partial(dice_score,
+                               include_background=False,
+                               num_classes=num_classes,
+                               average=average,
+                               aggregation_level="global",
+                               input_format="index"),
+                 "default_value": 0.0}
     }
 
 
@@ -74,7 +79,7 @@ def get_per_slice_segmentation_preds(model,
             head_mask = compute_head_mask(scans[i])
 
         for slice_idx in range(scans.shape[-3]):
-            head_mask_slice = head_mask[:, slice_idx] # C, D, H, W
+            head_mask_slice = head_mask[:, slice_idx]  # C, D, H, W
             scan_slice = scans[i][:, slice_idx]  # C, D, H, W
             mask_slice = masks[i][:, slice_idx]  # C, D, H, W
             pred_slice = preds[i][:, slice_idx]  # C, D, H, W

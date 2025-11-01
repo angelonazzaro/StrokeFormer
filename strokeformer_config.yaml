@@ -42,11 +42,10 @@ trainer:
       monitor_gym: null
       settings: null
   callbacks:
-  - class_path: callbacks.LogSegmentationPredictionCallback
+  - class_path: callbacks.LogPrediction
     init_args:
-      num_images: 1
-      log_every_n_val_epochs: 15
-      slices_per_scan: 20
+      num_samples: 1
+      log_every_n_epochs: 15
   - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     init_args:
       logging_interval: epoch
@@ -131,19 +130,19 @@ model:
   - 0.999
   eps: 1.0e-08
   opt_lr: 3e-5
-  warmup_lr: 4e-4
-  max_lr: 4e-6
+  warmup_lr: 4e-6
+  max_lr: 4e-4
   warmup_steps: 8
   lr_scheduler_interval: epoch
   weight_decay: 0.0006480380780002768
 data:
   paths:
     train:
-      masks: data/ATLAS_2/Processed/Splits/Train/Masks
-      scans: data/ATLAS_2/Processed/Splits/Train/Scans
+      masks: data/ATLAS_2/Processed/Masks
+      scans: data/ATLAS_2/Processed/Scans
     val:
-      masks: data/ATLAS_2/Processed/Splits/Val/Masks
-      scans: data/ATLAS_2/Processed/Splits/Val/Scans
+      masks: data/ATLAS_2/Processed/Masks
+      scans: data/ATLAS_2/Processed/Scans
   ext: .npy
   subvolume_depth: 128
   overlap: 0.5

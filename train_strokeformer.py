@@ -7,7 +7,6 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from dataset import SegmentationDataModule
 from models import StrokeFormer
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 class MyCLI(LightningCLI):
     @rank_zero_only

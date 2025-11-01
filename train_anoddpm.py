@@ -2,7 +2,7 @@ import torch
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
 
-from dataset.mri_dataloader import ReconstructionDataModule
+from dataset import ReconstructionDataModule
 from models import AnoDDPM
 
 
