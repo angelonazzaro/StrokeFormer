@@ -79,13 +79,13 @@ def get_per_slice_segmentation_preds(model,
             head_mask = compute_head_mask(scans[i])
 
         for slice_idx in range(scans.shape[-3]):
-            head_mask_slice = head_mask[:, slice_idx]  # C, D, H, W
-            scan_slice = scans[i][:, slice_idx]  # C, D, H, W
-            mask_slice = masks[i][:, slice_idx]  # C, D, H, W
-            pred_slice = preds[i][:, slice_idx]  # C, D, H, W
+            head_mask_slice = head_mask[:, slice_idx]  # C, H, W
+            scan_slice = scans[i][:, slice_idx]  # C, H, W
+            mask_slice = masks[i][:, slice_idx]  # C, H, W
+            pred_slice = preds[i][:, slice_idx]  # C, H, W
 
             lesion_size_str = get_lesion_size(head_mask_slice, mask_slice)
-            scores = compute_metrics(pred_slice, mask_slice, metrics)
+            scores = compute_metrics(pred_slice.unsqueeze(0), mask_slice.unsqueeze(0), metrics)
 
             ground_truth = generate_overlayed_slice(scan_slice, mask_slice, color=(0, 255, 0))
             prediction = generate_overlayed_slice(scan_slice, pred_slice, color=(255, 0, 0))

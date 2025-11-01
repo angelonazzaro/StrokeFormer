@@ -155,7 +155,7 @@ def test(args):
                 curr_ca = per_size_scores[lesion_size][metric_name]["ca"]
                 curr_n = per_size_scores[lesion_size][metric_name]["n"]
                 per_size_scores[lesion_size][metric_name] = {
-                    "ca": (scores[metric_name] + (curr_n * curr_ca) / (curr_n + 1)),
+                    "ca": (scores[metric_name] + curr_n * curr_ca) / (curr_n + 1),
                     "n": curr_n + 1
                 }
 
