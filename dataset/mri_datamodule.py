@@ -1,15 +1,15 @@
-from typing import Callable, List, Optional, Tuple, Union
+import os
+from typing import Optional, List, Callable
 
 import torch
 import torch.nn.functional as f
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
-from constants import SCAN_DIM, SLICE_DIM
-from dataset.mri_dataset import SegmentationDataset, ReconstructionDataset
+from .mri_dataset import SegmentationDataset, ReconstructionDataset
 
 
-def validate_paths_structure(paths):
+def validate_paths_structure(paths: dict):
     """
     `paths` must have the following structure:
     {
@@ -51,8 +51,7 @@ def validate_paths_structure(paths):
 
 def resize(scans, masks, new_h: int, new_w: int):
     # with align_corners = False and antialias = True this is equivalent to PIL downsample method
-    # shape must be (B, D*C, H, W)
-    # anti-alias is restricted to 4-D tensors
+    # shape must be (B, D*C, H, W) as anti-alias is restricted to 4-D tensors
     B, C, D, H, W = scans.shape
     scans = scans.view(B, C * D, H, W)
     masks = masks.view(B, C * D, H, W)
@@ -62,7 +61,8 @@ def resize(scans, masks, new_h: int, new_w: int):
                           mode="bilinear",
                           align_corners=False,
                           antialias=True)
-    masks = f.interpolate(masks,
+
+    masks = f.interpolate(masks.to(dtype=scans.dtype),
                           size=(new_h, new_w),
                           align_corners=False,
                           mode="bilinear",
@@ -80,10 +80,8 @@ class ReconstructionDataModule(LightningDataModule):
                  paths: dict,
                  num_classes: int,
                  ext: str = ".npy",
-                 slice_dim: Tuple[int, int, int] = SLICE_DIM,
-                 resize_to: Optional[Tuple[int, int]] = None,
+                 resize_to: Optional[tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
-                 augment: bool = False,
                  batch_size: int = 32,
                  num_workers: int = 0):
         super().__init__()
@@ -94,11 +92,9 @@ class ReconstructionDataModule(LightningDataModule):
 
         self.ext = ext
 
-        self.slice_dim = slice_dim
         self.resize_to = resize_to
 
         self.transforms = transforms
-        self.augment = augment
 
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -108,20 +104,18 @@ class ReconstructionDataModule(LightningDataModule):
         self.train_set, self.val_set, self.test_set = (None, None, None)
 
     def setup(self, stage):
-        augment = self.augment
-        splits = ['train', 'val']
-
-        if stage == 'test':
-            augment = False
-            splits = ['test']
+        if stage == "fit":
+            transforms = self.transforms
+            splits = ["train", "val"]
+        else:
+            transforms = None
+            splits = ["test"]
 
         for split in splits:
             setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
-                                                                masks=self.paths[split]["masks"],
-                                                                ext=self.ext,
-                                                                slice_dim=self.slice_dim,
-                                                                transforms=self.transforms,
-                                                                augment=augment))
+                                                              masks=self.paths[split]["masks"],
+                                                              ext=self.ext,
+                                                              transforms=transforms))
 
     def train_dataloader(self):
         return DataLoader(
@@ -157,29 +151,32 @@ class ReconstructionDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, head_masks, masks = zip(*batch)
+        scans, head_masks, masks = [], [], []
+
+        for el in batch:
+            scans.append(el["scan"])
+            head_masks.append(el["head_mask"])
+            masks.append(el["mask"])
+
         scans, head_masks, masks = torch.stack(scans), torch.stack(head_masks), torch.stack(masks)
 
         if self.resize_to is not None:
             _, masks = resize(scans.unsqueeze(2), masks.unsqueeze(2), *self.resize_to)
             scans, head_masks = resize(scans.unsqueeze(2), head_masks.unsqueeze(2), *self.resize_to)
 
-        return scans.squeeze(2), head_masks.squeeze(2), masks.squeeze(2)
+        return scans.squeeze(2), head_masks.squeeze(2), masks.squeeze(2) # (B, C, H, W)
 
 
 class SegmentationDataModule(LightningDataModule):
     def __init__(self,
                  paths: dict,
-                 num_classes: int,
                  ext: str = ".npy",
-                 scan_dim: Tuple[int, int, int, int] = SCAN_DIM,
-                 subvolume_dim: Optional[int] = None,
-                 overlap: Optional[Union[float, Tuple[Optional[float], Optional[float], Optional[float]]]] = 0.5,
-                 resize_to: Optional[Tuple[int, int]] = None,
+                 subvolume_depth: Optional[int] = None,
+                 overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
-                 augment: bool = False,
+                 resize_to: Optional[tuple[int, int]] = None,
                  batch_size: int = 32,
-                 num_workers: int = 0):
+                 num_workers: Optional[int] = 0):
         super().__init__()
 
         validate_paths_structure(paths)
@@ -187,39 +184,33 @@ class SegmentationDataModule(LightningDataModule):
         self.paths = paths
 
         self.ext = ext
-
-        self.scan_dim = scan_dim
-        self.subvolume_dim = subvolume_dim
+        self.subvolume_depth = subvolume_depth
         self.overlap = overlap
-        self.resize_to = resize_to
-
         self.transforms = transforms
-        self.augment = augment
 
+        self.resize_to = resize_to
         self.batch_size = batch_size
-        self.num_workers = num_workers
+        self.num_workers = os.cpu_count() if num_workers is None else num_workers
 
-        self.num_classes = num_classes
+        self.train_set, self.val_set, self.test_set = None, None, None
+        self.stage = None
 
-        self.train_set, self.val_set, self.test_set = (None, None, None)
-
-    def setup(self, stage):
-        augment = self.augment
-        splits = ['train', 'val']
-
-        if stage == 'test':
-            augment = False
-            splits = ['test']
+    def setup(self, stage: str):
+        if stage == "fit":
+            transforms = self.transforms
+            splits = ["train", "val"]
+        else:
+            transforms = None
+            splits = ["test"]
 
         for split in splits:
             setattr(self, f"{split}_set", SegmentationDataset(scans=self.paths[split]["scans"],
                                                               masks=self.paths[split]["masks"],
                                                               ext=self.ext,
-                                                              scan_dim=self.scan_dim,
                                                               overlap=self.overlap,
-                                                              subvolume_dim=self.subvolume_dim,
-                                                              transforms=self.transforms,
-                                                              augment=augment))
+                                                              subvolume_depth=self.subvolume_depth,
+                                                              transforms=transforms))
+        self.stage = stage
 
     def train_dataloader(self):
         return DataLoader(
@@ -249,13 +240,18 @@ class SegmentationDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, masks = zip(*batch)
-        scans, masks = torch.stack(scans), torch.stack(masks)
+        scans, masks, means, stds = [], [], [], []
+
+        for el in batch:
+            scans.append(el["scan"])
+            masks.append(el["mask"])
+            means.append(el["mean"])
+            stds.append(el["std"])
+
+        scans, masks = torch.stack(scans), torch.stack(masks)  # batched tensors (B, C, D, H, W)
+        means, stds = torch.stack(means), torch.stack(stds)  # (B)
 
         if self.resize_to is not None:
             scans, masks = resize(scans, masks, *self.resize_to)
 
-        masks = torch.nn.functional.one_hot(masks.long().squeeze(1), num_classes=self.num_classes)  # [B, D, H, W, N]
-        masks = masks.permute(0, -1, -4, -3, -2)  # [B, D, H, W, N] -> [B, N, D, H, W]
-
-        return scans, masks
+        return {"scans": scans, "masks": masks, "means": means, "stds": stds}
