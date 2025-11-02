@@ -320,9 +320,9 @@ class GaussianDiffusionModel:
 
         if t_distance is None:
             t_distance = self.num_timesteps
+
         seq = [x.cpu().detach()]
         if see_whole_sequence == "whole":
-
             for t in range(int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 # noise = torch.randn_like(x)
@@ -480,156 +480,156 @@ class GaussianDiffusionModel:
             "mse": mse,
         }
 
-    # def detection(self, model, x_0, total_avg: int = 3):
-    #     if self.noise_fn == "gauss" or self.noise_fn == "simplex":
-    #         return self.detection_B(model, x_0, total_avg=total_avg, denoise_fn=self.noise_fn)
-    #     else:
-    #         return self.detection_B(model, x_0, total_avg=total_avg, denoise_fn="octave")
+    def detection(self, model, x_0, total_avg: int = 3):
+        if self.noise_fn == "gauss" or self.noise_fn == "simplex":
+            return self.detection_B(model, x_0, total_avg=total_avg, denoise_fn=self.noise_fn)
+        else:
+            return self.detection_B(model, x_0, total_avg=total_avg, denoise_fn="octave")
 
-    # def detection_A(self, model, x_0, args, file, mask, total_avg=2):
-    #     for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
-    #               f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/",
-    #               f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/A"]:
-    #         try:
-    #             os.makedirs(i)
-    #         except OSError:
-    #             pass
-    #
-    #     for i in range(7, 0, -1):
-    #         freq = 2 ** i
-    #         self.noise_fn = lambda x, t: generate_simplex_noise(
-    #             self.simplex, x, t, False, frequency=freq,
-    #             in_channels=self.img_channels
-    #         )
-    #
-    #         for t_distance in range(50, int(self.T * 0.6), 50):
-    #             output = torch.empty((total_avg, 1, *self.img_size), device=x_0.device)
-    #             for avg in range(total_avg):
-    #
-    #                 t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
-    #                 x = self.sample_q(
-    #                     x_0, t_tensor,
-    #                     self.noise_fn(x_0, t_tensor).float()
-    #                 )
-    #
-    #                 for t in range(int(t_distance) - 1, -1, -1):
-    #                     t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-    #                     with torch.no_grad():
-    #                         out = self.sample_p(model, x, t_batch)
-    #                         x = out["sample"]
-    #
-    #                 output[avg, ...] = x
-    #
-    #             # save image containing initial, each final denoised image, mean & mse
-    #             output_mean = torch.mean(output, dim=0).reshape(1, 1, *self.img_size)
-    #             mse = ((output_mean - x_0).square() * 2) - 1
-    #             mse_threshold = mse > 0
-    #             mse_threshold = (mse_threshold.float() * 2) - 1
-    #             out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
-    #
-    #             temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A')
-    #
-    #             plt.imshow(gridify_output(out, 4), cmap='gray')
-    #             plt.axis('off')
-    #             plt.savefig(
-    #                 f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A/freq={i}-t'
-    #                 f'={t_distance}-{len(temp) + 1}.png'
-    #             )
-    #             plt.clf()
-    #
-    # def detection_B(self, model, x_0, args, file, mask, denoise_fn="gauss", total_avg=5):
-    #     assert type(file) == tuple
-    #     for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
-    #               f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}",
-    #               f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}"]:
-    #         try:
-    #             os.makedirs(i)
-    #         except OSError:
-    #             pass
-    #     if denoise_fn == "octave":
-    #         end = int(self.T * 0.6)
-    #         self.noise_fn = lambda x, t: generate_simplex_noise(
-    #             self.simplex, x, t, False, frequency=64, octave=6,
-    #             persistence=0.8
-    #         ).float()
-    #     else:
-    #         end = int(self.T * 0.8)
-    #         self.noise_fn = lambda x, t: torch.randn_like(x)
-    #     # multiprocessing?
-    #     dice_coeff = []
-    #     for t_distance in range(50, end, 50):
-    #         output = torch.empty((total_avg, 1, *self.img_size), device=x_0.device)
-    #         for avg in range(total_avg):
-    #
-    #             t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
-    #             x = self.sample_q(
-    #                 x_0, t_tensor,
-    #                 self.noise_fn(x_0, t_tensor).float()
-    #             )
-    #
-    #             for t in range(int(t_distance) - 1, -1, -1):
-    #                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-    #                 with torch.no_grad():
-    #                     out = self.sample_p(model, x, t_batch)
-    #                     x = out["sample"]
-    #
-    #             output[avg, ...] = x
-    #
-    #         # save image containing initial, each final denoised image, mean & mse
-    #         output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *self.img_size)
-    #
-    #         temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}')
-    #
-    #         dice = evaluation.heatmap(
-    #             real=x_0, recon=output_mean, mask=mask,
-    #             filename=f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/'
-    #                      f'{denoise_fn}/heatmap-t={t_distance}-{len(temp) + 1}.png'
-    #         )
-    #
-    #         mse = ((output_mean - x_0).square() * 2) - 1
-    #         mse_threshold = mse > 0
-    #         mse_threshold = (mse_threshold.float() * 2) - 1
-    #         out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
-    #
-    #         plt.imshow(gridify_output(out, 4), cmap='gray')
-    #         plt.axis('off')
-    #         plt.savefig(
-    #             f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}/t'
-    #             f'={t_distance}-{len(temp) + 1}.png'
-    #         )
-    #         plt.clf()
-    #
-    #         dice_coeff.append(dice)
-    #     return dice_coeff
-    #
-    # def detection_A_fixedT(self, model, x_0, mask, end_freq=6):
-    #     t_distance = 250
-    #
-    #     output = torch.empty((6 * end_freq, 1, *self.img_size), device=x_0.device)
-    #     for i in range(1, end_freq + 1):
-    #
-    #         freq = 2 ** i
-    #         noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq).float()
-    #
-    #         t_tensor = torch.tensor([t_distance - 1], device=x_0.device).repeat(x_0.shape[0])
-    #         x = self.sample_q(
-    #             x_0, t_tensor,
-    #             noise_fn(x_0, t_tensor).float()
-    #         )
-    #         x_noised = x.clone().detach()
-    #         for t in range(int(t_distance) - 1, -1, -1):
-    #             t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-    #             with torch.no_grad():
-    #                 out = self.sample_p(model, x, t_batch, denoise_fn=noise_fn)
-    #                 x = out["sample"]
-    #
-    #         mse = ((x_0 - x).square() * 2) - 1
-    #         mse_threshold = mse > 0
-    #         mse_threshold = (mse_threshold.float() * 2) - 1
-    #
-    #         output[(i - 1) * 6:i * 6, ...] = torch.cat((x_0, x_noised, x, mse, mse_threshold, mask))
-    #
-    #     return output
+    def detection_A(self, model, x_0, args, file, mask, total_avg=2):
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/A"]:
+            try:
+                os.makedirs(i)
+            except OSError:
+                pass
+
+        for i in range(7, 0, -1):
+            freq = 2 ** i
+            self.noise_fn = lambda x, t: generate_simplex_noise(
+                self.simplex, x, t, False, frequency=freq,
+                in_channels=self.img_channels
+            )
+
+            for t_distance in range(50, int(self.T * 0.6), 50):
+                output = torch.empty((total_avg, 1, *self.img_size), device=x_0.device)
+                for avg in range(total_avg):
+
+                    t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
+                    x = self.sample_q(
+                        x_0, t_tensor,
+                        self.noise_fn(x_0, t_tensor).float()
+                    )
+
+                    for t in range(int(t_distance) - 1, -1, -1):
+                        t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                        with torch.no_grad():
+                            out = self.sample_p(model, x, t_batch)
+                            x = out["sample"]
+
+                    output[avg, ...] = x
+
+                # save image containing initial, each final denoised image, mean & mse
+                output_mean = torch.mean(output, dim=0).reshape(1, 1, *self.img_size)
+                mse = ((output_mean - x_0).square() * 2) - 1
+                mse_threshold = mse > 0
+                mse_threshold = (mse_threshold.float() * 2) - 1
+                out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
+
+                temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A')
+
+                plt.imshow(gridify_output(out, 4), cmap='gray')
+                plt.axis('off')
+                plt.savefig(
+                    f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A/freq={i}-t'
+                    f'={t_distance}-{len(temp) + 1}.png'
+                )
+                plt.clf()
+
+    def detection_B(self, model, x_0, args, file, mask, denoise_fn="gauss", total_avg=5):
+        assert type(file) == tuple
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}"]:
+            try:
+                os.makedirs(i)
+            except OSError:
+                pass
+        if denoise_fn == "octave":
+            end = int(self.T * 0.6)
+            self.noise_fn = lambda x, t: generate_simplex_noise(
+                self.simplex, x, t, False, frequency=64, octave=6,
+                persistence=0.8
+            ).float()
+        else:
+            end = int(self.T * 0.8)
+            self.noise_fn = lambda x, t: torch.randn_like(x)
+        # multiprocessing?
+        dice_coeff = []
+        for t_distance in range(50, end, 50):
+            output = torch.empty((total_avg, 1, *self.img_size), device=x_0.device)
+            for avg in range(total_avg):
+
+                t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
+                x = self.sample_q(
+                    x_0, t_tensor,
+                    self.noise_fn(x_0, t_tensor).float()
+                )
+
+                for t in range(int(t_distance) - 1, -1, -1):
+                    t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                    with torch.no_grad():
+                        out = self.sample_p(model, x, t_batch)
+                        x = out["sample"]
+
+                output[avg, ...] = x
+
+            # save image containing initial, each final denoised image, mean & mse
+            output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *self.img_size)
+
+            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}')
+
+            dice = evaluation.heatmap(
+                real=x_0, recon=output_mean, mask=mask,
+                filename=f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/'
+                         f'{denoise_fn}/heatmap-t={t_distance}-{len(temp) + 1}.png'
+            )
+
+            mse = ((output_mean - x_0).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+            out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
+
+            plt.imshow(gridify_output(out, 4), cmap='gray')
+            plt.axis('off')
+            plt.savefig(
+                f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}/t'
+                f'={t_distance}-{len(temp) + 1}.png'
+            )
+            plt.clf()
+
+            dice_coeff.append(dice)
+        return dice_coeff
+
+    def detection_A_fixedT(self, model, x_0, mask, end_freq=6):
+        t_distance = 250
+
+        output = torch.empty((6 * end_freq, 1, *self.img_size), device=x_0.device)
+        for i in range(1, end_freq + 1):
+
+            freq = 2 ** i
+            noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq).float()
+
+            t_tensor = torch.tensor([t_distance - 1], device=x_0.device).repeat(x_0.shape[0])
+            x = self.sample_q(
+                x_0, t_tensor,
+                noise_fn(x_0, t_tensor).float()
+            )
+            x_noised = x.clone().detach()
+            for t in range(int(t_distance) - 1, -1, -1):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                with torch.no_grad():
+                    out = self.sample_p(model, x, t_batch, denoise_fn=noise_fn)
+                    x = out["sample"]
+
+            mse = ((x_0 - x).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+
+            output[(i - 1) * 6:i * 6, ...] = torch.cat((x_0, x_noised, x, mse, mse_threshold, mask))
+
+        return output
 
 
 """

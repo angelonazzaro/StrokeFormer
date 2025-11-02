@@ -62,7 +62,7 @@ class LogPrediction(Callback):
 
     def _log_reconstruction_prediction(self, trainer: "pl.Trainer", model: "pl.LightningModule"):
         with torch.no_grad():
-            recons = model.diffusion_model.forward_backward(model.ema, self.samples, see_whole_sequence="whole")
+            recons = model.forward_backward(self.samples, see_whole_sequence="whole", model=model.ema)
 
         fig, ax = plt.subplots()
 

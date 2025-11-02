@@ -1,4 +1,5 @@
 import copy
+import random
 from typing import Literal, Optional
 
 import torch.optim
@@ -60,19 +61,40 @@ class AnoDDPM(LightningModule):
 
         self.save_hyperparameters()
 
-    def forward(self, x, head_masks=None, run_backward: bool = False,
-                whole_sequence: Optional[Literal["whole", "half"]] = None):
+    def forward(self,
+                x,
+                head_masks=None,
+                run_backward: bool = False,
+                see_whole_sequence: Optional[Literal["whole", "half"]] = None,
+                t_distance: Optional[int] = None):
         loss, estimates = self.diffusion_model.p_loss(self.unet, x, train_start=self.train_start, head_masks=head_masks)
 
         return_dict = {"loss": loss, "estimates": estimates}
 
         if run_backward:
-            recons = self.diffusion_model.forward_backward(self.unet, x, see_whole_sequence=whole_sequence)
+            recons = self.forward_backward(x, see_whole_sequence=see_whole_sequence, t_distance=t_distance)
             return_dict["recons"] = recons
 
         return return_dict
 
-    def _common_step(self, batch, batch_idx, prefix: Literal['train', 'val', 'test']):
+    def forward_backward(self,
+                         x,
+                         see_whole_sequence: Optional[Literal["whole", "half"]] = None,
+                         t_distance: Optional[int] = None,
+                         model=None):
+        t_distance = t_distance or self.diffusion_model.T
+
+        if self.diffusion_model.noise_fn == "gauss":
+            timestep = random.randint(int(t_distance * 0.3), int(t_distance * 0.8))
+        else:
+            timestep = random.randint(int(t_distance * 0.1), int(t_distance * 0.6))
+
+        return self.diffusion_model.forward_backward(model or self.unet, x, see_whole_sequence=see_whole_sequence, t_distance=timestep)
+
+    def _common_step(self,
+                     batch,
+                     batch_idx,
+                     prefix: Literal['train', 'val', 'test']):
         if batch_idx > 0 and prefix == 'train':
             # making sure this is called after the first optimizer step
             update_ema_params(self.ema, self.unet)
