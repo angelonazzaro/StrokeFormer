@@ -6,8 +6,9 @@ from lightning import LightningModule
 from torch import Tensor, optim
 
 from losses import SegmentationLoss
-from utils import compute_metrics, build_metrics
+from utils import compute_metrics, build_metrics, load_anoddpm_checkpoint
 from .segformer3d import SegFormer3D
+from ..anoddpm import AnoDDPM
 
 
 class StrokeFormer(LightningModule):
@@ -26,7 +27,8 @@ class StrokeFormer(LightningModule):
                  warmup_steps: int = 10,
                  betas: tuple[float, float] = (0.9, 0.999),
                  weight_decay: float = 1e-3,
-                 lr_scheduler_interval: Literal["epoch", "step"] = "epoch"):
+                 lr_scheduler_interval: Literal["epoch", "step"] = "epoch",
+                 detection_model: Optional[Union[LightningModule, str]] = None):
         super().__init__()
 
         self.model = SegFormer3D(num_classes=num_classes, in_channels=in_channels)
@@ -44,12 +46,29 @@ class StrokeFormer(LightningModule):
         self.eps = eps
         self.weight_decay = weight_decay
         self.lr_scheduler_interval = lr_scheduler_interval
+         
+        self.detection_model = detection_model
+
+        if isinstance(detection_model, str):
+            # load detection model that will be later used for region proposal
+            # here, we assume it's AnoDDPM which is composed of a base UNet model and its EMA
+            # since it will be used in inference mode, we only need the EMA
+            self.detection_model = load_anoddpm_checkpoint(AnoDDPM, detection_model, inference=True)
+        
+        # freeze detection model
+        if self.detection_model is not None:
+            for param in self.detection_model.parameters():
+                param.requires_grad = False
+            self.detection_model.eval()
 
         self.metrics = build_metrics(num_classes=num_classes)
 
         self.save_hyperparameters()
 
     def forward(self, x: Tensor, return_preds: bool = False, return_dict: bool = False) -> Union[Tensor, dict]:
+        # TODO: handle region proposal logic from the detection model
+        if self.detection_model is not None:
+            pass
         logits = self.model(x)  # (B, N, D, H, W)
         logits = logits.view(logits.shape[0], logits.shape[1], x.shape[1], *logits.shape[2:])  # (B, N, C, D, H, W)
 
