@@ -17,7 +17,7 @@ from tqdm import tqdm
 from constants import LESION_SIZES
 from dataset import SegmentationDataModule
 from models import StrokeFormer
-from utils import build_metrics, get_per_slice_segmentation_preds, convert_to_rgb
+from utils import build_metrics, get_per_slice_segmentation_preds, convert_to_rgb, get_device
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -42,11 +42,10 @@ class SemanticSegmentationTarget:
 
 
 def test(args):
-    logger.info("=== Starting test evaluation ===")
+    logger.info("=== Starting segmentation test evaluation ===")
 
     model = StrokeFormer.load_from_checkpoint(args.ckpt_path)
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.cudnn.benchmark else "cpu"
-    model = model.to(device=device)
+    model = model.to(device=get_device())
     model.eval()
     model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
 
@@ -90,7 +89,7 @@ def test(args):
 
     inferer = partial(inferer, network=model)
 
-    metrics = build_metrics(num_classes=args.num_classes)
+    metrics = build_metrics(num_classes=args.num_classes, inference=True)
 
     logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
     logger.info("=== Starting inference over test set ===")
@@ -173,18 +172,18 @@ def test(args):
             torch.cuda.empty_cache()
 
     logger.info("Inference complete. Aggregating metrics...")
-    global_metrics = defaultdict(float)
+    global_scores = defaultdict(float)
 
     for size in per_size_scores.keys():
         for metric_name in metrics.keys():
             # do not include healthy slices
             if size != "No Lesion":
-                global_metrics[metric_name] += per_size_scores[size][metric_name]["ca"]
+                global_scores[metric_name] += per_size_scores[size][metric_name]["ca"]
 
-    for metric_name, metric_value in global_metrics.items():
-        global_metrics[metric_name] = round(metric_value / (len(per_size_scores.keys()) - 1), 4)
+    for metric_name, metric_value in global_scores.items():
+        global_scores[metric_name] = round(metric_value / (len(per_size_scores.keys()) - 1), 4)
 
-    global_metrics = {"model_name": model_name, **global_metrics}
+    global_scores = {"model_name": model_name, **global_scores}
 
     scores_path = os.path.join(args.scores_dir, args.scores_file)
     per_size_path = os.path.join(args.scores_dir, args.per_size_scores_file)
@@ -193,10 +192,10 @@ def test(args):
     file_exists = os.path.exists(scores_path)
 
     with open(scores_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=global_metrics.keys())
+        writer = csv.DictWriter(f, fieldnames=global_scores.keys())
         if not file_exists:
             writer.writeheader()
-        writer.writerow(global_metrics)
+        writer.writerow(global_scores)
 
     logger.info(f"Writing per-size metrics to: {per_size_path}")
     file_exists = os.path.exists(per_size_path)
@@ -210,7 +209,7 @@ def test(args):
             writer.writerow(row)
 
     logger.info(f"=== Test evaluation completed ===")
-    logger.info(f"Global metrics: {global_metrics}")
+    logger.info(f"Global metrics: {global_scores}")
 
 
 if __name__ == "__main__":
@@ -221,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--masks", type=str, default=None, nargs="+")
     parser.add_argument("--subvolume_depth", type=int, default=189)
     parser.add_argument("--overlap", type=float, default=0.5)
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--scan_dim", nargs=4, type=int, default=(1, 189, 192, 192))
     parser.add_argument("--resize_to", nargs=2, type=int, default=None)

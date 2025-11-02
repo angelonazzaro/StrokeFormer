@@ -13,9 +13,35 @@ from torchvision.transforms.v2.functional import to_pil_image
 from constants import HEAD_MASK_THRESHOLD
 
 
+def load_anoddpm_checkpoint(model_class, checkpoint_path: str, inference: bool = False, device: Optional[str] = None):
+    # model_class is necessary to avoid a circular import error
+    device = device or get_device()
+
+    model = model_class.load_from_checkpoint(checkpoint_path, map_location=device)
+
+    if inference:
+        # load only the EMA weights as the main unet model
+        if getattr(model, "ema", None) is not None:
+            model.unet = model.ema
+            del model.ema
+
+    return model
+
+
+def get_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        return torch.device('mps')
+    else:
+        return torch.device('cpu')
+
+
 def gridify_output(img, row_size=-1):
     scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    return torchvision.utils.make_grid(scale_img(img), nrow=row_size, pad_value=-1).cpu().data.permute(0, 2, 1).contiguous().permute(2, 1, 0)
+    return torchvision.utils.make_grid(scale_img(img), nrow=row_size, pad_value=-1).cpu().data.permute(0, 2,
+                                                                                                       1).contiguous().permute(
+        2, 1, 0)
 
 
 def compute_head_mask(scan: Union[np.ndarray, Tensor],
@@ -87,11 +113,10 @@ def overlay_img(scan: np.ndarray,
 
 
 def filter_sick_slices_per_volume(
-    scans: Tensor,
-    masks: Tensor,
-    input_format: Literal["one-hot", "index"] = "one-hot"
+        scans: Tensor,
+        masks: Tensor,
+        input_format: Literal["one-hot", "index"] = "one-hot"
 ) -> tuple[Tensor, Tensor]:
-
     B = scans.shape[0]
 
     if input_format == "one-hot":
@@ -115,7 +140,8 @@ def filter_sick_slices_per_volume(
 
     max_sick_slices = fg_sick.sum(dim=1).max().item()
     if max_sick_slices == 0:
-        return torch.empty((0, *scans.shape[1:]), device=scans.device), torch.empty((0, *masks.shape[1:]), device=masks.device)
+        return torch.empty((0, *scans.shape[1:]), device=scans.device), torch.empty((0, *masks.shape[1:]),
+                                                                                    device=masks.device)
 
     preds = []
     tgts = []
@@ -137,7 +163,8 @@ def filter_sick_slices_per_volume(
         if current_slices < max_sick_slices:
             pad_amount = max_sick_slices - current_slices
             pad_dims = pred_slices.ndim
-            pad = [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0, 0, 0] if pad_dims == 5 else [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0]
+            pad = [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0, 0, 0] if pad_dims == 5 else [0, 0] * (
+            (pad_dims - 3)) + [0, pad_amount] + [0, 0]
             pred_slices = f.pad(pred_slices, pad, mode='constant', value=0)
             tgt_slices = f.pad(tgt_slices, pad, mode='constant', value=0)
 

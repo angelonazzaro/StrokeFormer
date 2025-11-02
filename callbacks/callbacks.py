@@ -41,8 +41,8 @@ class LogPrediction(Callback):
 
         if needed > 0:
             take = min(needed, batch[0].shape[0])
-            self.samples.append(batch["scans"][:take])
-            self.targets.append(batch["masks"][:take])
+            self.samples.append(batch["scans" if self.task == "segmentation" else "slices"][:take])
+            self.targets.append(batch["masks" if self.task == "segmentation" else "head_masks"][:take])
 
     def _log_segmentation_prediction(self, trainer: "pl.Trainer", model: "pl.LightningModule"):
         if len(self.columns) == 0:
