@@ -77,8 +77,7 @@ def resize(scans, masks, new_h: int, new_w: int):
 
 class ReconstructionDataModule(LightningDataModule):
     def __init__(self,
-                 paths: dict,
-                 num_classes: int,
+                 scans: str,
                  ext: str = ".npy",
                  resize_to: Optional[tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
@@ -86,20 +85,13 @@ class ReconstructionDataModule(LightningDataModule):
                  num_workers: int = 0):
         super().__init__()
 
-        validate_paths_structure(paths)
-
-        self.paths = paths
-
+        self.scans = scans
         self.ext = ext
-
         self.resize_to = resize_to
-
         self.transforms = transforms
 
         self.batch_size = batch_size
         self.num_workers = num_workers
-
-        self.num_classes = num_classes
 
         self.train_set, self.val_set, self.test_set = (None, None, None)
 
@@ -112,10 +104,9 @@ class ReconstructionDataModule(LightningDataModule):
             splits = ["test"]
 
         for split in splits:
-            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
-                                                              masks=self.paths[split]["masks"],
-                                                              ext=self.ext,
-                                                              transforms=transforms))
+            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.scans,
+                                                                ext=self.ext,
+                                                                transforms=transforms))
 
     def train_dataloader(self):
         return DataLoader(
@@ -151,20 +142,18 @@ class ReconstructionDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, head_masks, masks = [], [], []
+        slices, head_masks = [], []
 
         for el in batch:
-            scans.append(el["scan"])
+            slices.append(el["scan_slice"])
             head_masks.append(el["head_mask"])
-            masks.append(el["mask"])
 
-        scans, head_masks, masks = torch.stack(scans), torch.stack(head_masks), torch.stack(masks)
+        slices, head_masks = torch.stack(slices), torch.stack(head_masks)
 
         if self.resize_to is not None:
-            _, masks = resize(scans.unsqueeze(2), masks.unsqueeze(2), *self.resize_to)
-            scans, head_masks = resize(scans.unsqueeze(2), head_masks.unsqueeze(2), *self.resize_to)
+            slices, head_masks = resize(slices.unsqueeze(2), head_masks.unsqueeze(2), *self.resize_to)
 
-        return scans.squeeze(2), head_masks.squeeze(2), masks.squeeze(2) # (B, C, H, W)
+        return {"slices": slices.squeeze(2), "head_masks": head_masks.squeeze(2)}  # (B, C, H, W)
 
 
 class SegmentationDataModule(LightningDataModule):

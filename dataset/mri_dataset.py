@@ -9,6 +9,7 @@ from torch import Tensor
 from torch.utils.data import IterableDataset, Dataset
 from torchvision.transforms import v2
 
+from constants import SLICE_DIM
 from utils import extract_patches, round_half_up, compute_head_mask
 
 
@@ -60,20 +61,18 @@ class ReconstructionDataset(Dataset):
     def __init__(
             self,
             scans: Union[List[str], str],
-            masks: Optional[Union[List[str], str]] = None,
             ext: str = ".npy",
             transforms: Optional[List[Callable]] = None,
-            augment: bool = False,
+            slice_dim: tuple[int, int, int] = SLICE_DIM,
     ):
         super().__init__()
 
-        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
+        self.scans, _ = init_scans_masks_filepaths(scans, None, ext)
 
         # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
         # this could lead the models to learn a sort of ordering bias
         perm = np.random.permutation(len(self.scans))
         self.scans = [self.scans[i] for i in perm]
-        self.masks = [self.masks[i] for i in perm]
 
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
@@ -85,18 +84,16 @@ class ReconstructionDataset(Dataset):
                 # transforms.RandomAffine(0, translate=(0.02, 0.1)),
                 # transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
                 # transforms.CenterCrop(256),
-                v2.ToImage(), # same as ToTensor
-                v2.ToDtype(torch.float32, scale=True), # same as ToTensor
+                v2.ToImage(),  # same as ToTensor
+                v2.ToDtype(torch.float32, scale=True),  # same as ToTensor
                 v2.Normalize((0.5, ) * slice_dim[-3], (0.5, ) * slice_dim[-3]) # noqa
             ])
-
-        self.augment = augment
 
     def __len__(self):
         return len(self.scans)
 
     def __getitem__(self, idx):
-        scan_slice, mask_slice = load_data(self.scans, self.masks, idx, self.transforms)
+        scan_slice, mask_slice = load_data(self.scans, None, idx, self.transforms)
 
         head_mask = compute_head_mask(scan_slice)
 
@@ -106,7 +103,7 @@ class ReconstructionDataset(Dataset):
 
         scan_slice = scan_slice / (slice_range[1] - slice_range[0])
 
-        return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=mask_slice.dtype), "mask_slice": mask_slice}
+        return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=mask_slice.dtype)}
 
 
 class SegmentationDataset(IterableDataset):
