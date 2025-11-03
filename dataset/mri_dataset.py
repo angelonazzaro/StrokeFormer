@@ -93,7 +93,7 @@ class ReconstructionDataset(Dataset):
         return len(self.scans)
 
     def __getitem__(self, idx):
-        scan_slice, mask_slice = load_data(self.scans, None, idx, self.transforms)
+        scan_slice, _ = load_data(self.scans, None, idx, None)
 
         head_mask = compute_head_mask(scan_slice)
 
@@ -103,7 +103,10 @@ class ReconstructionDataset(Dataset):
 
         scan_slice = scan_slice / (slice_range[1] - slice_range[0])
 
-        return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=mask_slice.dtype)}
+        if self.transforms:
+            scan_slice = self.transforms(scan_slice)
+
+        return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=torch.uint8)}
 
 
 class SegmentationDataset(IterableDataset):
