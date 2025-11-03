@@ -48,7 +48,7 @@ def main(args):
     sizes_distribution = {size: sizes_distribution[size]["percentage"] for size in sizes_distribution.keys()}
     sizes_distribution_metadata = get_lesion_size_distribution_metadata(scans_filepaths, masks_filepaths)
 
-    dataframe = [{"size": size, "filepath": fp[0]} for size in sizes_distribution.keys() for fp in sizes_distribution_metadata[size]["filepaths"]]
+    dataframe = [{"size": size, "filepath": fp[1]} for size in sizes_distribution.keys() for fp in sizes_distribution_metadata[size]["filepaths"]]
     df = pd.DataFrame(dataframe)
 
     # compute volume-level distribution

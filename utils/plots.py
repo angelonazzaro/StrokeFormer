@@ -1,10 +1,10 @@
 import math
 from typing import List, Optional
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
+from scipy import ndimage
 
 from constants import LESION_SIZES
 from .helpers import get_lesion_size, load_volume, compute_head_mask
@@ -54,7 +54,7 @@ def get_lesion_size_distribution(scans_filepaths: List[str],
     for (count, label) in sorted_items:
         percentage = count * 100 / total
         distribution[label] = {"percentage": percentage, "count": count}
-    
+
     return distribution
 
 
@@ -68,13 +68,13 @@ def plot_lesion_size_distribution(scans_filepaths: List[str],
 
     plt.figure(figsize=figsize)
     labels, percentages, counts = [], [], []
-    
+
     for label in distribution.keys():
         labels.append(label)
         percentages.append(distribution[label]["percentage"])
-        percentages.append(distribution[label]["count"])
+        counts.append(distribution[label]["count"])
 
-    plt.bar(labels, percentages, colors=colors)
+    plt.bar(labels, counts, color=colors)
 
     for i in range(len(percentages)):
         plt.text(i, counts[i] + 7.5, f"{percentages[i]:.2f}%", ha="center")
@@ -123,7 +123,6 @@ def get_lesion_size_distribution_metadata(scans_filepaths: List[str],
         scan = load_volume(scans_filepaths[i])
         mask = load_volume(masks_filepaths[i]).astype(np.uint8)
         head_mask = compute_head_mask(scan)
-        num_lesions_per_patient = 0
 
         for slice_idx in range(mask.shape[-1]):
             mask_slice = mask[..., slice_idx]
@@ -136,18 +135,17 @@ def get_lesion_size_distribution_metadata(scans_filepaths: List[str],
             if lesion_size_str != "No Lesion":
                 metadata["sick_voxels"] += lesion_size
                 metadata["sick_slices_num"] += 1
-
-                # get number of lesions/connected components
-                _, thresh = cv2.threshold(mask_slice, 0, 1, cv2.THRESH_BINARY)
-                num_lesions, _, _, _ = cv2.connectedComponentsWithStats(thresh, 4, cv2.CV_32S)  # noqa
-                # connectedComponentsWithStats counts also the background as a connected component so
-                # the number of lesion must be decremented by one
-                num_lesions -= 1
-                num_lesions_per_patient += num_lesions
             else:
                 metadata["healthy_voxels"] += np.sum(scan_slice)
                 metadata["healthy_slices_num"] += 1
 
-        metadata["num_lesions_per_patient"].append(num_lesions_per_patient)
+        if mask.ndim == 4:
+            mask = mask[0]
+        # get number of lesions/connected components
+        labeled_mask, num_lesions = ndimage.label(mask)
+        # ndimage.label counts also the background as a connected component so
+        # the number of lesion must be decremented by one
+        num_lesions -= 1
+        metadata["num_lesions_per_patient"].append(num_lesions)
 
     return metadata
