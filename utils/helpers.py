@@ -164,11 +164,18 @@ def filter_sick_slices_per_volume(
 
         current_slices = pred_slices.shape[-3]
 
+        if current_slices == 0:
+            continue
+
         if current_slices < max_sick_slices:
             pad_amount = max_sick_slices - current_slices
             pad_dims = pred_slices.ndim
-            pad = [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0, 0, 0] if pad_dims == 5 else [0, 0] * (
-            (pad_dims - 3)) + [0, pad_amount] + [0, 0]
+            if pad_dims == 5:
+                pad = [0, 0] * ((pad_dims - 3)) + [0, pad_amount] + [0, 0, 0, 0]
+            elif pad_dims == 4:
+                pad = [0, 0] * ((pad_dims - 2)) + [0, pad_amount] + [0, 0]
+            else:
+                pad = [0, 0] * ((pad_dims - 1)) + [0, pad_amount] + [0, 0]
             pred_slices = f.pad(pred_slices, pad, mode='constant', value=0)
             tgt_slices = f.pad(tgt_slices, pad, mode='constant', value=0)
 

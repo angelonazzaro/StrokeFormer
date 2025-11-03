@@ -40,7 +40,7 @@ class LogPrediction(Callback):
         needed = self.num_samples - len(self.samples)
 
         if needed > 0:
-            take = min(needed, batch[0].shape[0])
+            take = min(needed, batch["scans"].shape[0])
             self.samples.append(batch["scans" if self.task == "segmentation" else "slices"][:take])
             self.targets.append(batch["masks" if self.task == "segmentation" else "head_masks"][:take])
 
