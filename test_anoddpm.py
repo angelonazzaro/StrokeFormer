@@ -1,16 +1,16 @@
-import os
 import csv
+import os
 from argparse import ArgumentParser
-from datetime import time
 
 import torch
 from lightning import seed_everything
-from matplotlib import animation, pyplot as plt
+from torchvision.transforms.v2.functional import to_pil_image
+from torchvision.utils import make_grid
 from tqdm import tqdm
 
-from models import AnoDDPM
 from dataset import ReconstructionDataModule
-from utils import get_device, build_metrics, compute_metrics, gridify_output, load_anoddpm_checkpoint
+from models import AnoDDPM
+from utils import build_metrics, compute_metrics, load_anoddpm_checkpoint
 
 
 def test(args):
@@ -34,27 +34,70 @@ def test(args):
     model_prediction_dir = os.path.join(args.scores_dir, model_name, "predictions")
 
     os.makedirs(model_prediction_dir, exist_ok=True)
-    global_scores = {m: metrics[m]["default_value"] for m in metrics.keys()}
+    global_scores = {}
+    for metric_name in metrics.keys():
+        global_scores[metric_name] = {
+            "ca": 0.0,
+            "n": 0,
+        }
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc="Reconstructing brains")):
-        slices = batch["slices"]
-        slices = slices.to(device=model.device)
+        slices, head_masks = batch["slices"], batch["head_masks"]
+        slices, head_masks = slices.to(device=model.device), head_masks.to(device=model.device)
+
         preds_until_now = batch_idx * slices.shape[0]
 
         with torch.no_grad():
-            recons = model.forward_backward(slices)
+            recons = model.forward_backward(slices, see_whole_sequence=args.see_whole_sequence, t_distance=args.t_distance)
 
-        recons = recons[-1]
+        # shape of recons changes based on see_whole_sequence
+        # if None, B tensors of shape (C, H, W),
+        # otherwise it is a list of B elements, each of shape (B, C, H, W)
+        if args.see_whole_sequence is not None:
+            recons = recons[-1]  # get xhat_0
+        else:
+            if not isinstance(recons, torch.Tensor):
+                recons = torch.stack(recons)
+            if recons.ndim == 3:  # missing B dimension if batch_size is 1
+                recons = recons.unsqueeze(0)
 
-        scores = compute_metrics(recons, slices, metrics)
+        # focus the metrics computation on brain regions only
+        scores = compute_metrics(recons * head_masks, slices * head_masks, metrics, task="reconstruction")
+
+        # CA update rule: (x_n+1 + n * CA_n) / (n + 1)
+        for metric_name in global_scores.keys():
+            curr_ca = global_scores[metric_name]["ca"]
+            curr_n = global_scores[metric_name]["n"]
+            global_scores[metric_name] = {
+                "ca": (scores[metric_name] + curr_n * curr_ca) / (curr_n + 1),
+                "n": curr_n + 1
+            }
 
         if args.n_predictions > preds_until_now:
-            fig, ax = plt.subplots()
+            n_pairs = min(25, recons.shape[0], slices.shape[0])
+            recons_to_show = recons[:n_pairs]
+            preds_to_show = slices[:n_pairs]
+            if recons_to_show.ndim == 3:
+                recons_to_show = recons_to_show.unsqueeze(1)
+            if preds_to_show.ndim == 3:
+                preds_to_show = preds_to_show.unsqueeze(1)
+            recons_to_show = recons_to_show.detach().cpu().float()
+            preds_to_show = preds_to_show.detach().cpu().float()
 
-            imgs = [[ax.imshow(gridify_output(x, 5), animated=True)] for x in recons]
-            ani = animation.ArtistAnimation(fig, imgs, interval=50, blit=True, repeat_delay=1000)
+            all_imgs = torch.cat([preds_to_show, recons_to_show], dim=0)
+            min_vals = all_imgs.view(all_imgs.size(0), -1).min(dim=1)[0].view(-1, 1, 1, 1)
+            max_vals = all_imgs.view(all_imgs.size(0), -1).max(dim=1)[0].view(-1, 1, 1, 1)
+            all_imgs = (all_imgs - min_vals) / (max_vals - min_vals + 1e-8)
 
-            ani.save(os.path.join(model_prediction_dir, f"{time.time()}.mp4")) # noqa
+            # interleave reference and reconstruction: ref0, rec0, ref1, rec1, ...
+            paired_images = torch.empty((n_pairs * 2, 1, *recons_to_show.shape[2:]), dtype=all_imgs.dtype)
+            paired_images[0::2] = all_imgs[:n_pairs]
+            paired_images[1::2] = all_imgs[n_pairs:n_pairs * 2]
+
+            # create the grid (5 rows, 10 columns = 5 pairs per row)
+            grid = make_grid(paired_images, nrow=10, padding=2, pad_value=1.0)
+            img_pil = to_pil_image(grid)
+            img_pil.save(os.path.join(model_prediction_dir, f"{batch_idx}_paired_grid.png"))
 
     scores_path = os.path.join(args.scores_dir, args.scores_file)
     file_exists = os.path.exists(scores_path)
@@ -77,6 +120,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--model_name", type=str, default=None)
+    parser.add_argument("--t_distance", type=int, default=None)
+    parser.add_argument("--see_whole_sequence", type=str, default=None, choices=["half", "whole"])
 
     parser.add_argument("--n_predictions", help="Number of predictions to save", type=int, default=30)
     parser.add_argument("--num_classes", type=int, default=2)

@@ -17,14 +17,17 @@ from utils import get_lesion_size, generate_overlayed_slice, compute_head_mask, 
 def compute_metrics(preds: Tensor,
                     targets: Tensor,
                     metrics: dict,
-                    prefix: Optional[Literal["train", "val"]] = None) -> dict:
+                    prefix: Optional[Literal["train", "val"]] = None,
+                    task: Literal["segmentation", "reconstruction"] = "segmentation") -> dict:
     prefix = f"{prefix}_" if prefix else ""
 
     scores = {f"{prefix}{metric_name}": metric["default_value"] for metric_name, metric in metrics.items()}
-    preds = preds.to(dtype=torch.long)
-    targets = targets.to(dtype=torch.long)
 
-    preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
+    if task == "segmentation":
+        preds = preds.to(dtype=torch.long)
+        targets = targets.to(dtype=torch.long)
+
+        preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
 
     if preds.shape[0] > 0:
         for metric_name, metric in metrics.items():
