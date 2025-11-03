@@ -120,7 +120,8 @@ class SegmentationDataset(IterableDataset):
                  ext: str = ".npy",
                  subvolume_depth: Optional[int] = None,
                  overlap: Optional[float] = 0.5,
-                 transforms: Optional[List[Callable]] = None):
+                 transforms: Optional[List[Callable]] = None,
+                 augment: bool = False):
         super().__init__()
 
         """
@@ -153,6 +154,8 @@ class SegmentationDataset(IterableDataset):
                     A list of transformations applied to each scan (and mask).
                     Each transform should take a scan (and optionally a mask) as input
                     and return the transformed version.
+                augment: (bool, default=False):
+                    Whether to perform data augmentation.
         """
 
         # currently, only the Z dimension is supported for subvolume extraction.
@@ -180,8 +183,15 @@ class SegmentationDataset(IterableDataset):
 
         if transforms is not None:
             transforms = v2.Compose(transforms)
+        else:
+            transforms = v2.RandomApply([
+                v2.RandomHorizontalFlip(p=0.5),
+                v2.RandomVerticalFlip(p=0.5),
+                v2.RandomRotation(degrees=(-30, 30))
+            ], p=0.5)
 
         self.transforms = transforms
+        self.augment = augment
 
     def __len__(self):
         return len(self.scans) * self.subvolumes_num
@@ -191,7 +201,7 @@ class SegmentationDataset(IterableDataset):
         indexes = list(range(len(self.scans)))
 
         for index in indexes:
-            scan, mask = load_data(self.scans, self.masks, index, self.transforms)
+            scan, mask = load_data(self.scans, self.masks, index, self.transforms if self.augment else None)
 
             # extract [overlapped] subvolumes along Z dimension
             scan_chunks = extract_patches(scan=scan, overlap=self.overlap,

@@ -163,6 +163,7 @@ class SegmentationDataModule(LightningDataModule):
                  subvolume_depth: Optional[int] = None,
                  overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
+                 augment: bool = False,
                  resize_to: Optional[tuple[int, int]] = None,
                  batch_size: int = 32,
                  num_workers: Optional[int] = 0):
@@ -176,6 +177,7 @@ class SegmentationDataModule(LightningDataModule):
         self.subvolume_depth = subvolume_depth
         self.overlap = overlap
         self.transforms = transforms
+        self.augment = augment
 
         self.resize_to = resize_to
         self.batch_size = batch_size
@@ -196,6 +198,7 @@ class SegmentationDataModule(LightningDataModule):
             setattr(self, f"{split}_set", SegmentationDataset(scans=self.paths[split]["scans"],
                                                               masks=self.paths[split]["masks"],
                                                               ext=self.ext,
+                                                              augment=self.augment if stage == "fit" else False,
                                                               overlap=self.overlap,
                                                               subvolume_depth=self.subvolume_depth,
                                                               transforms=transforms))
