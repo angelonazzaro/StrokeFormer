@@ -38,6 +38,9 @@ class StrokeFormer(LightningModule):
 
         self.num_classes = num_classes
 
+        if warmup_lr > max_lr:
+            max_lr = warmup_lr * 100
+
         self.opt_lr = opt_lr
         self.warmup_lr = warmup_lr
         self.max_lr = max_lr

@@ -123,7 +123,7 @@ def filter_sick_slices_per_volume(
         # one-hot format: mask shape (B, N, C, D, H, W)
         # foreground assumed to be at channel index 1
         if masks.ndim == 6:
-            fg_sick = masks[:, 1].any(dim=(-2, -1))  # (B, D)
+            fg_sick = masks[:, 1].any(dim=(1, -2, -1))  # (B, D)
         else:
             raise ValueError("One-hot input should have 6 dims (B, N, C, D, H, W)")
     elif input_format == "index":
@@ -138,7 +138,7 @@ def filter_sick_slices_per_volume(
     else:
         raise ValueError(f"Unknown input_format '{input_format}'. Use 'one-hot' or 'index'.")
 
-    max_sick_slices = fg_sick.sum(dim=1).max().item()
+    max_sick_slices = fg_sick.sum(dim=-1).max().item()
     if max_sick_slices == 0:
         return torch.empty((0, *scans.shape[1:]), device=scans.device), torch.empty((0, *masks.shape[1:]),
                                                                                     device=masks.device)
@@ -147,16 +147,20 @@ def filter_sick_slices_per_volume(
     tgts = []
 
     for b in range(B):
-        sick_idx = fg_sick[b].nonzero(as_tuple=False).squeeze(1)
+        sick_idx = fg_sick[b]
+
         if len(sick_idx) == 0:
             continue
 
-        if scans.ndim == 5:  # (B, C, D, H, W)
-            pred_slices = scans[b][:, sick_idx, :, :]
-            tgt_slices = masks[b][:, sick_idx, :, :]
-        else:  # (B, D, H, W)
-            pred_slices = scans[b][sick_idx, :, :]
-            tgt_slices = masks[b][sick_idx, :, :]
+        if scans.ndim == 6:  # (B, N, C, D, H, W)
+            pred_slices = scans[b][:, :, sick_idx]
+            tgt_slices = masks[b][:, :, sick_idx]
+        elif scans.ndim == 5:  # (B, C, D, H, W)
+            pred_slices = scans[b][:, sick_idx]
+            tgt_slices = masks[b][:, sick_idx]
+        else: # (B, D, H, W)
+            pred_slices = scans[b][sick_idx]
+            tgt_slices = masks[b][sick_idx ]
 
         current_slices = pred_slices.shape[-3]
 

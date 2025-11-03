@@ -882,7 +882,8 @@ class BinaryDiceLoss(torch.nn.Module):
     def __init__(self,
                  num_classes: int,
                  include_background: bool = False,
-                 input_format: Literal["one-hot", "index", "mixed"] = "one-hot",
+                 apply_sigmoid: bool = True,
+                 input_format: Literal["one-hot", "index", "mixed"] = "index",
                  average: Optional[Literal["micro", "macro", "weighted", "none"]] = "macro",
                  aggregation_level: Optional[Literal["samplewise", "global"]] = "global"):
         super(BinaryDiceLoss, self).__init__()
@@ -891,6 +892,7 @@ class BinaryDiceLoss(torch.nn.Module):
         self.include_background = include_background
         self.average = average
         self.aggregation_level = aggregation_level
+        self.apply_sigmoid = apply_sigmoid
 
         self.dice = partial(dice_score, include_background=include_background, num_classes=num_classes,
                             input_format=input_format, average=average, aggregation_level=aggregation_level)
@@ -911,10 +913,14 @@ class BinaryDiceLoss(torch.nn.Module):
             AssertionError: If the batch sizes of the predicted and target tensors do not match.
             Exception: If unexpected target not in [0, 1] range.
         """
-        assert predictions.shape[0] == targets.shape[
-            0], "BinaryDiceLoss: predictions & targets' batch sizes don't match"
+        assert predictions.shape[0] == targets.shape[0], "BinaryDiceLoss: predictions & targets' batch sizes don't match"
 
         if targets.unique().tolist() != [0, 1]:
             raise ValueError(f"BinaryDiceLoss: target expected in [0, 1] range but got {targets.unique()}")
+
+        if self.apply_sigmoid:
+            predictions = torch.sigmoid(predictions)
+            predictions = predictions.argmax(dim=1)
+            targets = targets.argmax(dim=1)
 
         return 1 - self.dice(predictions, targets)
