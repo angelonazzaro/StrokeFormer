@@ -41,8 +41,8 @@ def main(args):
     logger.info(f"Random seed set to {args.seed}")
     logger.info("=" * 80)
 
-    scans_filepaths = sorted(glob(os.path.join(args.scans_dir, f"*T1w*{args.ext}")), recursive=True) # noqa
-    masks_filepaths = sorted(glob(os.path.join(args.masks_dir, f"*T1lesion_masks*{args.ext}")), recursive=True) # noqa
+    scans_filepaths = sorted(glob(os.path.join(args.scans_dir, f"*T1w*{args.ext}"), recursive=True)) # noqa
+    masks_filepaths = sorted(glob(os.path.join(args.masks_dir, f"*T1lesion_mask*{args.ext}"), recursive=True)) # noqa
 
     sizes_distribution = get_lesion_size_distribution(scans_filepaths, masks_filepaths)
     sizes_distribution = {size: sizes_distribution[size]["percentage"] for size in sizes_distribution.keys()}
@@ -130,6 +130,7 @@ def main(args):
             overlap=args.overlap,
             subvolume_depth=args.subvolume_depth,
             transforms=args.transforms,
+            augment=True
         )
 
         seg_loss_cfg = json.loads(args.seg_loss_cfg)
@@ -139,7 +140,7 @@ def main(args):
                              seg_loss_cfg=seg_loss_cfg, cls_loss=args.cls_loss,
                              cls_loss_cfg=cls_loss_cfg, loss_weights=args.loss_weights,
                              opt_lr=args.opt_lr, warmup_lr=args.warmup_lr, max_lr=args.max_lr,
-                             weight_decay=args.weight_decay, betas=args.beta, eps=args.eps,
+                             weight_decay=args.weight_decay, betas=args.betas, eps=args.eps,
                              lr_scheduler_interval=args.lr_logging_interval,
                              in_channels=args.in_channels)
 
@@ -232,6 +233,7 @@ if __name__ == "__main__":
     parser.add_argument("--subvolume_depth", type=int, default=189)
     parser.add_argument("--overlap", type=float, default=0.5)
     parser.add_argument("--resize_to", nargs=2, type=int, default=None)
+    parser.add_argument("--scan_dim", nargs=4, type=int, default=(1, 189, 192, 192))
 
     # models
     parser.add_argument("--num_classes", type=int, default=2)
@@ -241,11 +243,12 @@ if __name__ == "__main__":
     parser.add_argument("--max_lr", type=float, default=4e-4)
     parser.add_argument("--warmup_steps", type=int, default=10)
     parser.add_argument("--weight_decay", type=float, default=1e-3)
+    parser.add_argument("--eps", type=float, default=1e-8)
     parser.add_argument("--betas", nargs=2, type=float, default=(0.9, 0.999))
     parser.add_argument("--seg_loss", type=str, default="ICILoss")
-    parser.add_argument("--seg_loss_cls", type=str, default="{}")
+    parser.add_argument("--seg_loss_cfg", type=str, default="{}")
     parser.add_argument("--cls_loss", type=str, default="BCEWithLogitsLoss")
-    parser.add_argument("--cls_loss_config", type=str, default="{}")
+    parser.add_argument("--cls_loss_cfg", type=str, default="{}")
     parser.add_argument("--loss_weights", nargs=2, type=float, default=(0.5, 0.5))
 
     # training
