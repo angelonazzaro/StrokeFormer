@@ -70,6 +70,9 @@ def convert_to_rgb(scan_slice: Union[np.ndarray, Tensor]):
         # normalize between [0,1] for RGB conversion
         scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
 
+    if scan_slice.dtype == np.int64 or scan_slice.dtype == torch.int64:
+        scan_slice = scan_slice.float()
+
     rgb_slice = np.asarray(to_pil_image(scan_slice).convert("RGB"))
     return rgb_slice
 
