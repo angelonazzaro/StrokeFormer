@@ -25,8 +25,9 @@ class LogPrediction(Callback):
         self.log_every_n_epochs = log_every_n_epochs
         self.num_samples = num_samples
         self.task = task
-        self.samples = []
-        self.targets = []
+        self.samples = None
+        self.targets = None
+        self.current_idx = 0
         self.columns = []
 
     @rank_zero_only
@@ -37,12 +38,20 @@ class LogPrediction(Callback):
                                 batch: Any,
                                 batch_idx: int,
                                 dataloader_idx: int = 0):
-        needed = self.num_samples - len(self.samples)
-
+        needed = self.num_samples - self.current_idx
+        batch_size = batch["scans"].shape[0]
         if needed > 0:
-            take = min(needed, batch["scans"].shape[0])
-            self.samples.append(batch["scans" if self.task == "segmentation" else "slices"][:take])
-            self.targets.append(batch["masks" if self.task == "segmentation" else "head_masks"][:take])
+            take = min(needed, batch_size)
+
+            if self.samples is None:
+                shape = (self.num_samples, *batch["scans"].shape[1:])
+                self.samples = torch.empty(shape, dtype=batch["scans"].dtype, device=batch["scans"].device)
+                mask_shape = (self.num_samples, *batch["masks"].shape[1:])
+                self.targets = torch.empty(mask_shape, dtype=batch["masks"].dtype, device=batch["masks"].device)
+
+            self.samples[self.current_idx:self.current_idx + take] = batch["scans" if self.task == "segmentation" else "slices"][:take]
+            self.targets[self.current_idx:self.current_idx + take] = batch["masks" if self.task == "segmentation" else "head_masks"][:take]
+            self.current_idx += take
 
     def _log_segmentation_prediction(self, trainer: "pl.Trainer", model: "pl.LightningModule"):
         if len(self.columns) == 0:
@@ -80,14 +89,6 @@ class LogPrediction(Callback):
             return
 
         pl_module.eval()
-
-        if isinstance(self.samples, List):
-            self.samples = torch.stack(self.samples)
-            self.targets = torch.stack(self.targets)
-
-            if self.samples.ndim == 3:
-                self.samples = self.samples.unsqueeze(0)  # add batch dimension in case it's only one sample
-                self.targets = self.targets.unsqueeze(0)
 
         if self.task == "segmentation":
             self._log_segmentation_prediction(trainer, pl_module)

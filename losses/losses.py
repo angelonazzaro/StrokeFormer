@@ -852,6 +852,10 @@ class SegmentationLoss(nn.Module):
 
         if predictions.shape[0] > 0:
             if self.seg_loss.__class__.__name__ == "ICILoss":
+                if predictions.ndim == 6:
+                    predictions = predictions.squeeze(2)
+                    targets = targets.squeeze(2)
+
                 predictions = einops.rearrange(predictions, "B N D H W -> B N H W D")
                 targets = einops.rearrange(targets, "B N D H W -> B N H W D")
 

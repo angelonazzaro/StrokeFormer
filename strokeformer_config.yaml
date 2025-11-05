@@ -9,7 +9,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: StrokeFormer3D-iciloss-patch
+      name: dynamic-ici-sweep
       save_dir: .
       version: null
       offline: false
@@ -44,7 +44,7 @@ trainer:
   callbacks:
   - class_path: callbacks.LogPrediction
     init_args:
-      num_samples: 1
+      num_samples: 3
       log_every_n_epochs: 15
   - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     init_args:
@@ -67,7 +67,7 @@ trainer:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
       dirpath: null
-      filename: StrokeFormer3D-baseline-{epoch:02d}-{val_loss:.2f}
+      filename: dynamic-iciloss-{epoch:02d}-{val_loss:.2f}
       monitor: val_loss
       verbose: true
       save_last: null
@@ -115,9 +115,8 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  seg_loss: BinaryDiceLoss
-  seg_loss_cfg:
-    num_classes: 2
+  seg_loss: ICILoss
+  seg_loss_cfg: null
   cls_loss: BCEWithLogitsLoss
   cls_loss_cfg: null
   loss_weights:
