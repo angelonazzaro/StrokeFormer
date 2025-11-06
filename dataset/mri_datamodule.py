@@ -198,7 +198,7 @@ class SegmentationDataModule(LightningDataModule):
             setattr(self, f"{split}_set", SegmentationDataset(scans=self.paths[split]["scans"],
                                                               masks=self.paths[split]["masks"],
                                                               ext=self.ext,
-                                                              augment=self.augment if stage == "fit" else False,
+                                                              augment=self.augment if split == "train" else False,
                                                               overlap=self.overlap,
                                                               subvolume_depth=self.subvolume_depth,
                                                               transforms=transforms))

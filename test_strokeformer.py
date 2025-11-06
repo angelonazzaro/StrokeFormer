@@ -1,5 +1,6 @@
 import csv
 import logging
+import math
 import os
 from argparse import ArgumentParser
 from collections import defaultdict
@@ -143,9 +144,19 @@ def test(args):
             for metric_name in metrics.keys():
                 curr_ca = per_size_scores[lesion_size][metric_name]["ca"]
                 curr_n = per_size_scores[lesion_size][metric_name]["n"]
+                new_score = scores[metric_name]
+
+                if math.isfinite(new_score):
+                    new_ca = (new_score + curr_n * curr_ca) / (curr_n + 1)
+                    new_n = curr_n + 1
+                else:
+                    # skip updating CA and count for inf or nan
+                    new_ca = curr_ca
+                    new_n = curr_n
+
                 per_size_scores[lesion_size][metric_name] = {
-                    "ca": (scores[metric_name] + curr_n * curr_ca) / (curr_n + 1),
-                    "n": curr_n + 1
+                    "ca": new_ca,
+                    "n": new_n
                 }
 
             if args.n_predictions > preds_until_now:

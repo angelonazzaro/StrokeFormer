@@ -27,6 +27,8 @@ class LogPrediction(Callback):
         self.task = task
         self.samples = None
         self.targets = None
+        self.means = None
+        self.stds = None
         self.current_idx = 0
         self.columns = []
 
@@ -48,9 +50,17 @@ class LogPrediction(Callback):
                 self.samples = torch.empty(shape, dtype=batch["scans"].dtype, device=batch["scans"].device)
                 mask_shape = (self.num_samples, *batch["masks"].shape[1:])
                 self.targets = torch.empty(mask_shape, dtype=batch["masks"].dtype, device=batch["masks"].device)
+                if self.task == "segmentation":
+                    self.means = torch.empty(self.num_samples, dtype=batch["means"].dtype, device=batch["means"].device)
+                    self.stds = torch.empty(self.num_samples, dtype=batch["stds"].dtype, device=batch["stds"].device)
 
             self.samples[self.current_idx:self.current_idx + take] = batch["scans" if self.task == "segmentation" else "slices"][:take]
             self.targets[self.current_idx:self.current_idx + take] = batch["masks" if self.task == "segmentation" else "head_masks"][:take]
+
+            if self.task == "segmentation":
+                self.means[self.current_idx:self.current_idx + take] = batch["means"][:take]
+                self.stds[self.current_idx:self.current_idx + take] = batch["stds"][:take]
+
             self.current_idx += take
 
     def _log_segmentation_prediction(self, trainer: "pl.Trainer", model: "pl.LightningModule"):
@@ -63,7 +73,7 @@ class LogPrediction(Callback):
 
         table = wandb.Table(columns=self.columns)
 
-        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics):  # noqa
+        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.means, self.stds):  # noqa
             table.add_data(result["slice_idx"], wandb.Image(result["ground_truth"]), wandb.Image(result["prediction"]), *result["scores"].values())
 
         # assuming wandb logger

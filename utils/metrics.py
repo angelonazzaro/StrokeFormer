@@ -31,7 +31,11 @@ def compute_metrics(preds: Tensor,
 
     if preds.shape[0] > 0:
         for metric_name, metric in metrics.items():
-            scores[prefix + metric_name] = torch.nan_to_num(metric["fn"](preds, targets), nan=metric["default_value"]).item()
+            score = torch.nan_to_num(metric["fn"](preds, targets), nan=metric["default_value"]).item()
+            if metric["default_value"] == float("inf") and score != float("inf"):
+                scores[prefix + metric_name] = score
+            else:
+                scores[prefix + metric_name] = score
 
     return scores
 

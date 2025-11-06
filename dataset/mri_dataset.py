@@ -45,7 +45,7 @@ def load_data(scans: List[str],
     if masks is not None:
         mask = np.load(masks[index])
 
-    scan, mask = torch.from_numpy(scan), torch.from_numpy(mask).to(dtype=torch.uint8)
+    scan, mask = torch.from_numpy(scan).to(dtype=torch.float32), torch.from_numpy(mask).to(dtype=torch.uint8)
 
     if scan.ndim == 4:
         scan = einops.rearrange(scan, "c h w d -> c d h w")
