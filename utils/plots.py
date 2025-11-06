@@ -7,13 +7,14 @@ from tqdm import tqdm
 from scipy import ndimage
 
 from constants import LESION_SIZES
-from .helpers import get_lesion_size, load_volume, compute_head_mask
+from .helpers import get_lesion_size, load_volume, compute_head_mask, generate_overlayed_slice
 
 
-def plot_mri_slices(mri_volume, figsize=(14, 14)):
+def plot_mri_slices(mri_volume, mask_volume=None, figsize=(14, 14)):
     # remove channel dimension if present
     if mri_volume.ndim == 4 and mri_volume.shape[0] == 1:
         mri_volume = mri_volume[0]
+        mask_volume = mask_volume[0]
     elif mri_volume.ndim != 3:
         raise ValueError("Input MRI must have shape (1, H, W, D) or (H, W, D).")
 
@@ -27,7 +28,12 @@ def plot_mri_slices(mri_volume, figsize=(14, 14)):
     axes = axes.flatten()
 
     for i in range(D):
-        axes[i].imshow(mri_volume[:, :, i], cmap='gray')
+        if mask_volume is not None:
+            scan_slice = generate_overlayed_slice(mri_volume[:, :, i], mask_volume[:, :, i], alpha=0.25)
+        else:
+            scan_slice = mri_volume[:, :, i]
+
+        axes[i].imshow(scan_slice, cmap='gray')
         axes[i].axis('off')
 
     # hide empty subplots

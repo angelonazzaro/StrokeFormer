@@ -74,7 +74,8 @@ class LogPrediction(Callback):
         table = wandb.Table(columns=self.columns)
 
         for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.means, self.stds):  # noqa
-            table.add_data(result["slice_idx"], wandb.Image(result["ground_truth"]), wandb.Image(result["prediction"]), *result["scores"].values())
+            if result["lesion_size"] != "No Lesion":
+                table.add_data(result["slice_idx"], wandb.Image(result["ground_truth"]), wandb.Image(result["prediction"]), *result["scores"].values())
 
         # assuming wandb logger
         trainer.logger.experiment.log({f"val_epoch_{trainer.current_epoch}/predictions": table})
