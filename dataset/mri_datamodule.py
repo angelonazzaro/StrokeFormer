@@ -232,18 +232,20 @@ class SegmentationDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, masks, means, stds = [], [], [], []
+        scans, masks, means, stds, mins_maxs = [], [], [], [], []
 
         for el in batch:
             scans.append(el["scan"])
             masks.append(el["mask"])
             means.append(el["mean"])
             stds.append(el["std"])
+            mins_maxs.append(el["min_max"])
 
         scans, masks = torch.stack(scans), torch.stack(masks)  # batched tensors (B, C, D, H, W)
         means, stds = torch.stack(means), torch.stack(stds)  # (B)
+        mins_maxs = torch.tensor(mins_maxs)
 
         if self.resize_to is not None:
             scans, masks = resize(scans, masks, *self.resize_to)
 
-        return {"scans": scans, "masks": masks, "means": means, "stds": stds}
+        return {"scans": scans, "masks": masks, "means": means, "stds": stds, "mins_maxs": mins_maxs}

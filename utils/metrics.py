@@ -158,7 +158,8 @@ def get_per_slice_segmentation_preds(model,
                                      masks: Tensor,
                                      metrics: dict,
                                      means: Optional[Tensor] = None,
-                                     stds: Optional[Tensor] = None):
+                                     stds: Optional[Tensor] = None,
+                                     mins_maxs: Optional[Tensor] = None,):
     """
         It is an iterator function that computes predictions and scores per single slice.
         Returns a dictionary containing:
@@ -176,6 +177,7 @@ def get_per_slice_segmentation_preds(model,
             metrics: Metrics to compute
             means: Tensor containing the original means needed to adjust the threshold for the head mask
             stds: Tensor containing the original stds needed to adjust the threshold for the head mask
+            mins_maxs: Tensor containing the standardize min and max values needed to adjust the threshold for the head mask
     """
 
     with torch.no_grad():
@@ -184,6 +186,11 @@ def get_per_slice_segmentation_preds(model,
     for i in range(scans.shape[0]):
         if means is not None and stds is not None:
             adjusted_threshold = (HEAD_MASK_THRESHOLD - means[i]) / stds[i]
+
+            if mins_maxs is not None:
+                z_min, z_max = mins_maxs[i]
+                adjusted_threshold = (adjusted_threshold - z_min) / (z_max - z_min)
+
             head_mask = compute_head_mask(scans[i], threshold=adjusted_threshold)
         else:
             head_mask = compute_head_mask(scans[i])

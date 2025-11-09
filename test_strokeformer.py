@@ -118,9 +118,10 @@ def test(args):
     logger.info(f"Predictions will be saved to {model_prediction_dir}")
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc="Segmenting lesions")):
-        scans, masks, means, stds = batch["scans"], batch["masks"], batch["means"], batch["stds"]
+        scans, masks, means, stds, mins_maxs = batch["scans"], batch["masks"], batch["means"], batch["stds"], batch["mins_maxs"]
         scans, masks = scans.to(device=model.device), masks.to(device=model.device)
         means, stds = means.to(device=model.device), stds.to(device=model.device)
+        mins_maxs = mins_maxs.to(device=model.device)
 
         preds_until_now = batch_idx * scans.shape[0]
         grayscale_cam = torch.zeros_like(scans[0], device=model.device)
@@ -130,7 +131,7 @@ def test(args):
             grayscale_cam = cam_model(scans, targets, eigen_smooth=False)  # noqa
             grayscale_cam = grayscale_cam  # (B, D, H, W)
 
-        for result in get_per_slice_segmentation_preds(inferer, scans, masks, metrics, means, stds):
+        for result in get_per_slice_segmentation_preds(inferer, scans, masks, metrics, means, stds, mins_maxs):
             ground_truth = torch.from_numpy(result["ground_truth"]).to(device=model.device)  # (H, W, C)
             prediction = torch.from_numpy(result["prediction"]).to(device=model.device)
 

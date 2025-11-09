@@ -217,4 +217,6 @@ class SegmentationDataset(IterableDataset):
             for scan_chunk, mask_chunk in zip(scan_chunks, mask_chunks):
                 scan_chunk_mean, scan_chunk_std = scan_chunk.mean(), scan_chunk.std()
                 scan_chunk = (scan_chunk - scan_chunk_mean) / scan_chunk_std
-                yield {"scan": scan_chunk, "mask": mask_chunk, "mean": scan_chunk_mean, "std": scan_chunk_std}
+                z_min, z_max = scan_chunk.min(), scan_chunk.max()
+                scan_chunk = (scan_chunk - z_min) / (z_max - z_min)
+                yield {"scan": scan_chunk, "mask": mask_chunk, "mean": scan_chunk_mean, "std": scan_chunk_std, "min_max": (z_min, z_max)}

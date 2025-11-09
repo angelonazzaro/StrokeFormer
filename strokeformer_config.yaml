@@ -9,7 +9,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: dynamic-ici-sweep
+      name: perfect-patch
       save_dir: .
       version: null
       offline: false
@@ -67,7 +67,7 @@ trainer:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
       dirpath: null
-      filename: dynamic-iciloss-{epoch:02d}-{val_loss:.2f}
+      filename: perfect-patch-{epoch:02d}-{val_loss:.2f}
       monitor: val_loss
       verbose: true
       save_last: null
@@ -115,8 +115,9 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  seg_loss: ICILoss
-  seg_loss_cfg: null
+  seg_loss: BinaryDiceLoss
+  seg_loss_cfg:
+    num_classes: 2
   cls_loss: BCEWithLogitsLoss
   cls_loss_cfg: null
   loss_weights:
