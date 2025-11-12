@@ -57,5 +57,5 @@ command:
   - ${program}
   - fit
   - --config
-  - strokeformer_config.yaml
+  - configs/strokeformer.yaml
   - ${args}

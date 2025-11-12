@@ -8,7 +8,6 @@ from torch import Tensor, optim
 from losses import SegmentationLoss
 from utils import compute_metrics, build_metrics, load_anoddpm_checkpoint
 from .segformer3d import SegFormer3D
-from ..anoddpm import AnoDDPM
 
 
 class StrokeFormer(LightningModule):
@@ -56,7 +55,8 @@ class StrokeFormer(LightningModule):
             # load detection model that will be later used for region proposal
             # here, we assume it's AnoDDPM which is composed of a base UNet model and its EMA
             # since it will be used in inference mode, we only need the EMA
-            self.detection_model = load_anoddpm_checkpoint(AnoDDPM, detection_model, inference=True)
+            # self.detection_model = load_anoddpm_checkpoint(AnoDDPM, detection_model, inference=True)
+            pass
         
         # freeze detection model
         if self.detection_model is not None:

@@ -40,15 +40,17 @@ def compute_metrics(preds: Tensor,
     return scores
 
 
-def build_metrics(num_classes: int,
+def build_metrics(num_classes: Optional[int] = None,
                   average: Literal["micro", "macro", "weighted", "none"] = "macro",
                   task: Literal["segmentation", "reconstruction"] = "segmentation",
                   inference: bool = False,
                   lesions_only: bool = True):
-    task_type = "binary" if num_classes <= 2 else "multiclass"
     metrics = {}
 
     if task == "segmentation":
+        if num_classes is None:
+            raise ValueError("`num_classes` must be specified if `task` is `segmentation`.")
+        task_type = "binary" if num_classes <= 2 else "multiclass"
         task_specific_metrics = {
             "dice": {
                 "fn": partial(dice_score,

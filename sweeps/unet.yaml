@@ -1,0 +1,41 @@
+
+program: train_strokeformer.py
+project: UNet-Recons
+entity: neurone-lab
+name: UNet-XS
+method: bayes
+metric:
+  goal: minimize
+  name: val_loss
+parameters:
+  model.lr:
+    distribution: log_uniform_values
+    min: 0.00001         # 1e-5
+    max: 0.001           # 1e-3
+  model.weight_decay:
+    distribution: log_uniform_values
+    min: 0.00001         # 1e-5
+    max: 0.01            # 1e-2
+  data.scans:
+    value:
+      train:
+        scans: "data/ATLAS_2/Processed/2D/Splits/train/"
+      val:
+        scans: "data/ATLAS_2/Processed/2D/Splits/val/"
+  data.batch_size:
+    value: 32
+  trainer.max_epochs:
+    value: 150
+early_terminate:
+  type: hyperband
+  eta: 3
+  min_iter: 1
+  max_iter: 10
+
+command:
+  - python
+  - ${program}
+  - fit
+  - --config
+  - configs/unet.yaml
+  - ${args}

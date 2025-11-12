@@ -77,14 +77,7 @@ class ReconstructionDataset(Dataset):
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
         else:
-            # apply AnoDDPM default transforms
             self.transforms = v2.Compose([
-                v2.ToPILImage(),
-                # transforms.CenterCrop((175, 240)),
-                # transforms.RandomAffine(0, translate=(0.02, 0.1)),
-                # transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
-                # transforms.CenterCrop(256),
-                v2.ToImage(),  # same as ToTensor
                 v2.ToDtype(torch.float32, scale=True),  # same as ToTensor
                 v2.Normalize((0.5, ) * slice_dim[-3], (0.5, ) * slice_dim[-3]) # noqa
             ])
@@ -154,6 +147,7 @@ class SegmentationDataset(IterableDataset):
                     A list of transformations applied to each scan (and mask).
                     Each transform should take a scan (and optionally a mask) as input
                     and return the transformed version.
+                    
                 augment: (bool, default=False):
                     Whether to perform data augmentation.
         """

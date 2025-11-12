@@ -3,7 +3,7 @@ from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
 
 from dataset import ReconstructionDataModule
-from models import AnoDDPM
+from models import UNet
 
 
 class MyCLI(LightningCLI):
@@ -23,7 +23,7 @@ class MyCLI(LightningCLI):
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
     MyCLI(
-        model_class=AnoDDPM,
+        model_class=UNet,
         datamodule_class=ReconstructionDataModule,
         save_config_kwargs={"overwrite": True},
     )
