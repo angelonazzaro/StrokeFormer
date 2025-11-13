@@ -6,7 +6,7 @@ from lightning import LightningModule
 from torch import Tensor, optim
 
 from losses import SegmentationLoss
-from utils import compute_metrics, build_metrics, load_anoddpm_checkpoint
+from utils import compute_metrics, build_metrics
 from .segformer3d import SegFormer3D
 
 

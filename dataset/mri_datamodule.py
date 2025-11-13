@@ -81,6 +81,7 @@ class ReconstructionDataModule(LightningDataModule):
                  ext: str = ".npy",
                  resize_to: Optional[tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
+                 augment: bool = False,
                  batch_size: int = 32,
                  num_workers: int = 0):
         super().__init__()
@@ -92,6 +93,8 @@ class ReconstructionDataModule(LightningDataModule):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+
+        self.augment = augment
 
         self.train_set, self.val_set, self.test_set = (None, None, None)
 
@@ -106,6 +109,7 @@ class ReconstructionDataModule(LightningDataModule):
         for split in splits:
             setattr(self, f"{split}_set", ReconstructionDataset(scans=self.scans,
                                                                 ext=self.ext,
+                                                                augment=self.augment if split == "train" else False,
                                                                 transforms=transforms))
 
     def train_dataloader(self):

@@ -9,15 +9,15 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from dataset import ReconstructionDataModule
-from models import AnoDDPM
-from utils import build_metrics, compute_metrics, load_anoddpm_checkpoint
+from models import UNet
+from utils import build_metrics, compute_metrics, get_device
 
 
 def test(args):
     seed_everything(args.seed)
 
-    model = load_anoddpm_checkpoint(AnoDDPM, args.ckpt_path, device='cpu', inference=True)
-    # model = model.to(device=get_device())
+    model = UNet.load_from_checkpoint(args.ckpt_path)
+    model = model.to(device=get_device())
     model.eval()
     model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
     
@@ -48,18 +48,7 @@ def test(args):
         preds_until_now = batch_idx * slices.shape[0]
 
         with torch.no_grad():
-            recons = model.forward_backward(slices, see_whole_sequence=args.see_whole_sequence, t_distance=args.t_distance)
-
-        # shape of recons changes based on see_whole_sequence
-        # if None, B tensors of shape (C, H, W),
-        # otherwise it is a list of B elements, each of shape (B, C, H, W)
-        if args.see_whole_sequence is not None:
-            recons = recons[-1]  # get xhat_0
-        else:
-            if not isinstance(recons, torch.Tensor):
-                recons = torch.stack(recons)
-            if recons.ndim == 3:  # missing B dimension if batch_size is 1
-                recons = recons.unsqueeze(0)
+            recons = model(slices)
 
         # focus the metrics computation on brain regions only
         scores = compute_metrics(recons * head_masks, slices * head_masks, metrics, task="reconstruction")
@@ -120,11 +109,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--model_name", type=str, default=None)
-    parser.add_argument("--t_distance", type=int, default=None)
-    parser.add_argument("--see_whole_sequence", type=str, default=None, choices=["half", "whole"])
 
     parser.add_argument("--n_predictions", help="Number of predictions to save", type=int, default=30)
-    parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--scores_dir", type=str, default="./recon_scores")
     parser.add_argument("--scores_file", type=str, default="recon_scores.csv")
 

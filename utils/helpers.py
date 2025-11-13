@@ -13,21 +13,6 @@ from torchvision.transforms.v2.functional import to_pil_image
 from constants import HEAD_MASK_THRESHOLD
 
 
-def load_anoddpm_checkpoint(model_class, checkpoint_path: str, inference: bool = False, device: Optional[str] = None):
-    # model_class is necessary to avoid a circular import error
-    device = device or get_device()
-
-    model = model_class.load_from_checkpoint(checkpoint_path, map_location=device)
-
-    if inference:
-        # load only the EMA weights as the main unet model
-        if getattr(model, "ema", None) is not None:
-            model.unet = model.ema
-            del model.ema
-
-    return model
-
-
 def get_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device('cuda')

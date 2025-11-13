@@ -63,11 +63,13 @@ class ReconstructionDataset(Dataset):
             scans: Union[List[str], str],
             ext: str = ".npy",
             transforms: Optional[List[Callable]] = None,
-            slice_dim: tuple[int, int, int] = SLICE_DIM,
+            augment: bool = False,
     ):
         super().__init__()
 
         self.scans, _ = init_scans_masks_filepaths(scans, None, ext)
+
+        self.augment = augment
 
         # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
         # this could lead the models to learn a sort of ordering bias
@@ -77,10 +79,11 @@ class ReconstructionDataset(Dataset):
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
         else:
-            self.transforms = v2.Compose([
-                v2.ToDtype(torch.float32, scale=True),  # same as ToTensor
-                v2.Normalize((0.5, ) * slice_dim[-3], (0.5, ) * slice_dim[-3]) # noqa
-            ])
+            self.transforms = v2.RandomApply([
+                v2.RandomHorizontalFlip(p=0.5),
+                v2.RandomVerticalFlip(p=0.5),
+                v2.RandomRotation(degrees=(-30, 30))
+            ], p=0.5)
 
     def __len__(self):
         return len(self.scans)
@@ -90,13 +93,10 @@ class ReconstructionDataset(Dataset):
 
         head_mask = compute_head_mask(scan_slice)
 
-        slice_mean, slice_std = scan_slice.mean(), scan_slice.std()
-        slice_range = (slice_mean - 1 * slice_std, slice_mean + 2 * slice_std)
-        scan_slice = torch.clip(scan_slice, slice_range[0], slice_range[1])
+        scan_slice = (scan_slice - scan_slice.mean()) / scan_slice.std()
+        scan_slice = 2 * ((scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())) - 1
 
-        scan_slice = scan_slice / (slice_range[1] - slice_range[0])
-
-        if self.transforms:
+        if self.transforms and self.augment:
             scan_slice = self.transforms(scan_slice)
 
         return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=torch.uint8)}
