@@ -35,7 +35,7 @@ class UpBlock(nn.Module):
 
         self.up = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
         self.conv = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
             nn.ReLU(),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
@@ -43,10 +43,11 @@ class UpBlock(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, x: Tensor, encoded_x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, encoded_x: Tensor = None) -> Tensor:
         x = self.up(x)
 
-        x = torch.cat([x, encoded_x], dim=1)
+        if encoded_x is not None:
+            x = torch.cat([x, encoded_x], dim=1)
         x = self.conv(x)
 
         return x
@@ -95,13 +96,15 @@ class UNet(l.LightningModule):
             nn.ReLU(),
         )
 
+        base_channels *= 2
+
         for i in range(n_blocks):
             # half the output channels for the expanding path
-            if i > 0:
-                setattr(self, f"upblock_{i}", UpBlock(base_channels, base_channels // 2))
-                base_channels = base_channels // 2
-            else:
-                setattr(self, f"upblock_{i}", UpBlock(base_channels * 2, base_channels))
+            # if i > 0:
+            setattr(self, f"upblock_{i}", UpBlock(base_channels, base_channels // 2))
+            base_channels = base_channels // 2
+            # else:
+            #     setattr(self, f"upblock_{i}", UpBlock(base_channels * 2, base_channels))
 
         self.out_conv = nn.Conv2d(base_channels, self.input_channels, kernel_size=1)
 
@@ -109,16 +112,17 @@ class UNet(l.LightningModule):
         self.save_hyperparameters()
 
     def forward(self, x: Tensor) -> Tensor:
-        feature_maps = []
+        # feature_maps = []
 
         for i in range(self.n_blocks):
             feature_map, x = getattr(self, f"downblock_{i}")(x)
-            feature_maps.append(feature_map)
+            # feature_maps.append(feature_map)
 
         x = self.bottleneck(x)
 
         for i in range(self.n_blocks):
-            x = getattr(self, f"upblock_{i}")(x, feature_maps[self.n_blocks - (i + 1)])
+            # x = getattr(self, f"upblock_{i}")(x, feature_maps[self.n_blocks - (i + 1)])
+            x = getattr(self, f"upblock_{i}")(x)
 
         logits = self.out_conv(x)  # (B, C, H, W)
         return logits
@@ -128,8 +132,7 @@ class UNet(l.LightningModule):
 
         logits = self.forward(scans)  # (B, C, H, W)
 
-        # by multiplying scans/logits with the head masks, the training signal is generated only from
-        # brain tissue
+        # by multiplying scans/logits with the head masks, the training signal is generated only from brain tissue
         scans = scans * head_masks
         logits = logits * head_masks
 
