@@ -3,7 +3,7 @@ from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
 
 from dataset import ReconstructionDataModule
-from models import UNet
+from models import RPN
 
 
 class MyCLI(LightningCLI):
@@ -23,7 +23,7 @@ class MyCLI(LightningCLI):
 if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
     MyCLI(
-        model_class=UNet,
+        model_class=RPN,
         datamodule_class=ReconstructionDataModule,
         save_config_kwargs={"overwrite": True},
     )

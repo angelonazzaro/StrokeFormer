@@ -18,7 +18,7 @@ def compute_metrics(preds: Tensor,
                     targets: Tensor,
                     metrics: dict,
                     prefix: Optional[Literal["train", "val"]] = None,
-                    task: Literal["segmentation", "reconstruction"] = "segmentation") -> dict:
+                    task: Literal["segmentation", "region_proposal"] = "segmentation") -> dict:
     prefix = f"{prefix}_" if prefix else ""
 
     scores = {f"{prefix}{metric_name}": metric["default_value"] for metric_name, metric in metrics.items()}
@@ -42,7 +42,7 @@ def compute_metrics(preds: Tensor,
 
 def build_metrics(num_classes: Optional[int] = None,
                   average: Literal["micro", "macro", "weighted", "none"] = "macro",
-                  task: Literal["segmentation", "reconstruction"] = "segmentation",
+                  task: Literal["segmentation", "region_proposal"] = "segmentation",
                   inference: bool = False,
                   lesions_only: bool = True):
     metrics = {}

@@ -7,10 +7,12 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import IterableDataset, Dataset
+from torchvision import tv_tensors
+from torchvision.ops import masks_to_boxes
 from torchvision.transforms import v2
 
 from constants import SLICE_DIM
-from utils import extract_patches, round_half_up, compute_head_mask
+from utils import extract_patches, round_half_up, compute_head_mask, resize
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str],
@@ -61,13 +63,16 @@ class ReconstructionDataset(Dataset):
     def __init__(
             self,
             scans: Union[List[str], str],
+            masks: Optional[Union[List[str], str]] = None,
             ext: str = ".npy",
             transforms: Optional[List[Callable]] = None,
+            resize_to: Optional[tuple[int, int]] = None,
+            bb_min_size: tuple[int, int] = (5, 5),
             augment: bool = False,
     ):
         super().__init__()
 
-        self.scans, _ = init_scans_masks_filepaths(scans, None, ext)
+        self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
 
         self.augment = augment
 
@@ -75,6 +80,10 @@ class ReconstructionDataset(Dataset):
         # this could lead the models to learn a sort of ordering bias
         perm = np.random.permutation(len(self.scans))
         self.scans = [self.scans[i] for i in perm]
+        self.masks = [self.masks[i] for i in perm]
+
+        self.bb_min_size = bb_min_size
+        self.resize_to = resize_to
 
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
@@ -89,17 +98,58 @@ class ReconstructionDataset(Dataset):
         return len(self.scans)
 
     def __getitem__(self, idx):
-        scan_slice, _ = load_data(self.scans, None, idx, None)
+        scan_slice, mask = load_data(self.scans, self.masks, idx, None)
+
+        if self.resize_to is not None:
+            scan_slice, mask = resize(scan_slice.unsqueeze(0).unsqueeze(0), mask.unsqueeze(0).unsqueeze(0), *self.resize_to)
+            scan_slice, mask = scan_slice.squeeze(0).squeeze(0), mask.squeeze(0).squeeze(0).to(torch.int64)
 
         head_mask = compute_head_mask(scan_slice)
 
+        # if slice is healthy, create empty bounding boxes
+        if mask.sum() == 0:
+            boxes = torch.empty((0, 4), dtype=torch.int64)
+            labels = torch.zeros((1,), dtype=torch.int64)
+            area = torch.zeros((0,), dtype=torch.int64)
+        else:
+            boxes = masks_to_boxes(mask)
+            # if lesion is too small to have a valid bounding box, expand it to bb_min_size
+            boxes = boxes.clone()  # avoid modifying original
+
+            widths = boxes[:, 2] - boxes[:, 0]
+            heights = boxes[:, 3] - boxes[:, 1]
+
+            small_width = widths < self.bb_min_size[1]
+            # adjust xmin and xmax to create a bb_min_size pixel width box centered at original center
+            x_centers = (boxes[small_width, 0] + boxes[small_width, 2]) / 2
+            boxes[small_width, 0] = x_centers - self.bb_min_size[1] / 2
+            boxes[small_width, 2] = x_centers + self.bb_min_size[1] / 2
+
+            small_height = heights < self.bb_min_size[0]
+            # adjust ymin and ymax to create a bb_min_size pixel height box centered at original center
+            y_centers = (boxes[small_height, 1] + boxes[small_height, 3]) / 2
+            boxes[small_height, 1] = y_centers - self.bb_min_size[0] / 2
+            boxes[small_height, 3] = y_centers + self.bb_min_size[0] / 2
+
+            labels = torch.ones((1,), dtype=torch.int64)
+            area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+
         scan_slice = (scan_slice - scan_slice.mean()) / scan_slice.std()
-        scan_slice = 2 * ((scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())) - 1
+        scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
+
+        scan_slice = tv_tensors.Image(scan_slice)
+
+        target = {
+            "boxes": tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=v2.functional.get_size(scan_slice)),
+            "mask": tv_tensors.Mask(mask),
+            "labels": labels,
+            "area": area
+        }
 
         if self.transforms and self.augment:
             scan_slice = self.transforms(scan_slice)
 
-        return {"scan_slice": scan_slice, "head_mask": head_mask.to(dtype=torch.uint8)}
+        return {"scan_slice": scan_slice, "target": target, "head_mask": head_mask.to(dtype=torch.uint8)}
 
 
 class SegmentationDataset(IterableDataset):

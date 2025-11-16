@@ -6,6 +6,7 @@ import torch.nn.functional as f
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
+from utils import resize
 from .mri_dataset import SegmentationDataset, ReconstructionDataset
 
 
@@ -49,35 +50,9 @@ def validate_paths_structure(paths: dict):
                     f"got {type(paths[split][subkey]).__name__}")
 
 
-def resize(scans, masks, new_h: int, new_w: int):
-    # with align_corners = False and antialias = True this is equivalent to PIL downsample method
-    # shape must be (B, D*C, H, W) as anti-alias is restricted to 4-D tensors
-    B, C, D, H, W = scans.shape
-    scans = scans.view(B, C * D, H, W)
-    masks = masks.view(B, C * D, H, W)
-
-    scans = f.interpolate(scans,
-                          size=(new_h, new_w),
-                          mode="bilinear",
-                          align_corners=False,
-                          antialias=True)
-
-    masks = f.interpolate(masks.to(dtype=scans.dtype),
-                          size=(new_h, new_w),
-                          align_corners=False,
-                          mode="bilinear",
-                          antialias=True).long()
-
-    # restore original shape of (B, C, D, resize_h, resize_w)
-    scans = scans.view(B, C, D, new_h, new_w)
-    masks = masks.view(B, C, D, new_h, new_w)
-
-    return scans, masks
-
-
 class ReconstructionDataModule(LightningDataModule):
     def __init__(self,
-                 scans: str,
+                 paths: dict,
                  ext: str = ".npy",
                  resize_to: Optional[tuple[int, int]] = None,
                  transforms: Optional[List[Callable]] = None,
@@ -86,7 +61,9 @@ class ReconstructionDataModule(LightningDataModule):
                  num_workers: int = 0):
         super().__init__()
 
-        self.scans = scans
+        validate_paths_structure(paths)
+
+        self.paths = paths
         self.ext = ext
         self.resize_to = resize_to
         self.transforms = transforms
@@ -107,8 +84,10 @@ class ReconstructionDataModule(LightningDataModule):
             splits = ["test"]
 
         for split in splits:
-            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.scans,
+            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
+                                                                masks=self.paths[split]["masks"],
                                                                 ext=self.ext,
+                                                                resize_to=self.resize_to,
                                                                 augment=self.augment if split == "train" else False,
                                                                 transforms=transforms))
 
@@ -153,9 +132,6 @@ class ReconstructionDataModule(LightningDataModule):
             head_masks.append(el["head_mask"])
 
         slices, head_masks = torch.stack(slices), torch.stack(head_masks)
-
-        if self.resize_to is not None:
-            slices, head_masks = resize(slices.unsqueeze(2), head_masks.unsqueeze(2), *self.resize_to)
 
         return {"slices": slices.squeeze(2), "head_masks": head_masks.squeeze(2)}  # (B, C, H, W)
 

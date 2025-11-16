@@ -6,11 +6,36 @@ import nibabel as nib
 import numpy as np
 import torch
 import torch.nn.functional as f
-import torchvision
 from torch import Tensor
 from torchvision.transforms.v2.functional import to_pil_image
 
 from constants import HEAD_MASK_THRESHOLD
+
+
+def resize(scans, masks, new_h: int, new_w: int):
+    # with align_corners = False and antialias = True this is equivalent to PIL downsample method
+    # shape must be (B, D*C, H, W) as anti-alias is restricted to 4-D tensors
+    B, C, D, H, W = scans.shape
+    scans = scans.view(B, C * D, H, W)
+    masks = masks.view(B, C * D, H, W)
+
+    scans = f.interpolate(scans,
+                          size=(new_h, new_w),
+                          mode="bilinear",
+                          align_corners=False,
+                          antialias=True)
+
+    masks = f.interpolate(masks.to(dtype=scans.dtype),
+                          size=(new_h, new_w),
+                          align_corners=False,
+                          mode="bilinear",
+                          antialias=True).long()
+
+    # restore original shape of (B, C, D, resize_h, resize_w)
+    scans = scans.view(B, C, D, new_h, new_w)
+    masks = masks.view(B, C, D, new_h, new_w)
+
+    return scans, masks
 
 
 def get_device() -> torch.device:
@@ -20,13 +45,6 @@ def get_device() -> torch.device:
         return torch.device('mps')
     else:
         return torch.device('cpu')
-
-
-def gridify_output(img, row_size=-1):
-    scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    return torchvision.utils.make_grid(scale_img(img), nrow=row_size, pad_value=-1).cpu().data.permute(0, 2,
-                                                                                                       1).contiguous().permute(
-        2, 1, 0)
 
 
 def compute_head_mask(scan: Union[np.ndarray, Tensor],
