@@ -135,6 +135,11 @@ model:
   warmup_steps: 8
   lr_scheduler_interval: epoch
   weight_decay: 0.0006480380780002768
+  rpn_model: mask-r-cnn-epoch=27-val_loss=0.03.ckpt
+  roi_size:
+    - 64
+    - 64
+    - 64
 data:
   paths:
     train:

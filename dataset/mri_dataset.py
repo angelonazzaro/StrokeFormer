@@ -11,8 +11,7 @@ from torchvision import tv_tensors
 from torchvision.ops import masks_to_boxes
 from torchvision.transforms import v2
 
-from constants import SLICE_DIM
-from utils import extract_patches, round_half_up, compute_head_mask, resize
+from utils import extract_patches, round_half_up, compute_head_mask, resize, expand_boxes
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str],
@@ -113,23 +112,7 @@ class ReconstructionDataset(Dataset):
             area = torch.zeros((0,), dtype=torch.int64)
         else:
             boxes = masks_to_boxes(mask)
-            # if lesion is too small to have a valid bounding box, expand it to bb_min_size
-            boxes = boxes.clone()  # avoid modifying original
-
-            widths = boxes[:, 2] - boxes[:, 0]
-            heights = boxes[:, 3] - boxes[:, 1]
-
-            small_width = widths < self.bb_min_size[1]
-            # adjust xmin and xmax to create a bb_min_size pixel width box centered at original center
-            x_centers = (boxes[small_width, 0] + boxes[small_width, 2]) / 2
-            boxes[small_width, 0] = x_centers - self.bb_min_size[1] / 2
-            boxes[small_width, 2] = x_centers + self.bb_min_size[1] / 2
-
-            small_height = heights < self.bb_min_size[0]
-            # adjust ymin and ymax to create a bb_min_size pixel height box centered at original center
-            y_centers = (boxes[small_height, 1] + boxes[small_height, 3]) / 2
-            boxes[small_height, 1] = y_centers - self.bb_min_size[0] / 2
-            boxes[small_height, 3] = y_centers + self.bb_min_size[0] / 2
+            boxes = expand_boxes(boxes, self.bb_min_size)
 
             labels = torch.ones((1,), dtype=torch.int64)
             area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
@@ -259,8 +242,17 @@ class SegmentationDataset(IterableDataset):
             # since we apply per-volume z-score normalization, we need the original mean and std to
             # scale the threshold accordingly when computing the head mask
             for scan_chunk, mask_chunk in zip(scan_chunks, mask_chunks):
+                head_mask = compute_head_mask(scan_chunk)
                 scan_chunk_mean, scan_chunk_std = scan_chunk.mean(), scan_chunk.std()
                 scan_chunk = (scan_chunk - scan_chunk_mean) / scan_chunk_std
                 z_min, z_max = scan_chunk.min(), scan_chunk.max()
                 scan_chunk = (scan_chunk - z_min) / (z_max - z_min)
-                yield {"scan": scan_chunk, "mask": mask_chunk, "mean": scan_chunk_mean, "std": scan_chunk_std, "min_max": (z_min, z_max)}
+
+                yield {
+                    "scan": scan_chunk,
+                    "head_mask": head_mask,
+                    "mask": mask_chunk,
+                    "mean": scan_chunk_mean,
+                    "std": scan_chunk_std,
+                    "min_max": (z_min, z_max)
+                }

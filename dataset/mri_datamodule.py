@@ -2,7 +2,6 @@ import os
 from typing import Optional, List, Callable
 
 import torch
-import torch.nn.functional as f
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
@@ -55,6 +54,7 @@ class ReconstructionDataModule(LightningDataModule):
                  paths: dict,
                  ext: str = ".npy",
                  resize_to: Optional[tuple[int, int]] = None,
+                 bb_min_size: tuple[int, int] = (5, 5),
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  batch_size: int = 32,
@@ -66,6 +66,7 @@ class ReconstructionDataModule(LightningDataModule):
         self.paths = paths
         self.ext = ext
         self.resize_to = resize_to
+        self.bb_min_size = bb_min_size
         self.transforms = transforms
 
         self.batch_size = batch_size
@@ -88,6 +89,7 @@ class ReconstructionDataModule(LightningDataModule):
                                                                 masks=self.paths[split]["masks"],
                                                                 ext=self.ext,
                                                                 resize_to=self.resize_to,
+                                                                bb_min_size=self.bb_min_size,
                                                                 augment=self.augment if split == "train" else False,
                                                                 transforms=transforms))
 
@@ -212,10 +214,11 @@ class SegmentationDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, masks, means, stds, mins_maxs = [], [], [], [], []
+        scans, masks, head_masks, means, stds, mins_maxs = [], [], [], [], [], []
 
         for el in batch:
             scans.append(el["scan"])
+            head_masks.append(el["head_mask"])
             masks.append(el["mask"])
             means.append(el["mean"])
             stds.append(el["std"])
@@ -223,9 +226,17 @@ class SegmentationDataModule(LightningDataModule):
 
         scans, masks = torch.stack(scans), torch.stack(masks)  # batched tensors (B, C, D, H, W)
         means, stds = torch.stack(means), torch.stack(stds)  # (B)
-        mins_maxs = torch.tensor(mins_maxs)
+        head_masks, mins_maxs = torch.stack(head_masks), torch.tensor(mins_maxs)
 
         if self.resize_to is not None:
-            scans, masks = resize(scans, masks, *self.resize_to)
+            _, masks = resize(scans, masks, *self.resize_to)
+            scans, head_masks = resize(scans, head_masks, *self.resize_to)
 
-        return {"scans": scans, "masks": masks, "means": means, "stds": stds, "mins_maxs": mins_maxs}
+        return {
+            "scans": scans,
+            "head_masks": head_masks,
+            "masks": masks,
+            "means": means,
+            "stds": stds,
+            "mins_maxs": mins_maxs
+        }
