@@ -112,9 +112,19 @@ def main(args):
         val_masks_paths = list(volume_dist.loc[val_folds].filepath)
         test_masks_paths = list(volume_dist.loc[test_folds].filepath)
 
+        if args.use_augmented:
+            # replace training normal scans and masks with augmented ones
+            for i in range(len(train_masks_paths)):
+                mask_filepath = train_masks_paths[i]
+
+                aug_mask_filepath = mask_filepath.replace(args.masks_dir, args.augmented_dir + "/Masks").replace("T1lesion_mask",
+                                                                                          "T1lesion_mask_augmented")
+                if os.path.exists(aug_mask_filepath):
+                    train_masks_paths[i] = aug_mask_filepath
+
         def _make_paths(filepaths):
             masks = [fp for fp in filepaths]
-            scans = [fp.replace(args.masks_dir, args.scans_dir).replace("label-L_desc-T1lesion_mask", "T1w") for fp in
+            scans = [fp.replace("Masks", "Scans").replace("label-L_desc-T1lesion_mask", "T1w") for fp in
                      filepaths]
 
             return {"scans": scans, "masks": masks}
@@ -172,6 +182,7 @@ def main(args):
         )
 
         trainer = Trainer(
+            devices=[2],
             callbacks=callbacks,
             logger=wandb_logger,
             max_epochs=args.max_epochs,
@@ -222,6 +233,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--k", type=int, default=5, help="Number of folds")
     parser.add_argument("--splits", nargs=3, type=int, default=(70, 10, 20), help="Percentage split (train, val, test)")
+    parser.add_argument("--use_augmented", default=False, action="store_true", help="Whether to use augmented scans for training")
+    parser.add_argument("--augmented_dir", default="data/ATLAS_2/Processed/Augmented/")
 
     # dataloader
     parser.add_argument("--scans_dir", type=str, required=True)
