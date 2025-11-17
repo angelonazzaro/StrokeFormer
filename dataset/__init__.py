@@ -1,2 +1,2 @@
-from .mri_datamodule import SegmentationDataModule, ReconstructionDataModule
-from .mri_dataset import SegmentationDataset, ReconstructionDataset
+from .mri_datamodule import SegmentationDataModule, RegionProposalDataModule
+from .mri_dataset import SegmentationDataset, RegionProposalDataset

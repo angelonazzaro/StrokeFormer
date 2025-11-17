@@ -22,7 +22,7 @@ config.yaml
 
 # Results
 scores/
-recon_scores/
+rpn_scores/
 cross_scores/
 lightning_logs/
 StrokeFormer/

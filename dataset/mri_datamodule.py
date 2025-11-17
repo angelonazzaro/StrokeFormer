@@ -6,7 +6,7 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
 from utils import resize
-from .mri_dataset import SegmentationDataset, ReconstructionDataset
+from .mri_dataset import SegmentationDataset, RegionProposalDataset
 
 
 def validate_paths_structure(paths: dict):
@@ -49,7 +49,7 @@ def validate_paths_structure(paths: dict):
                     f"got {type(paths[split][subkey]).__name__}")
 
 
-class ReconstructionDataModule(LightningDataModule):
+class RegionProposalDataModule(LightningDataModule):
     def __init__(self,
                  paths: dict,
                  ext: str = ".npy",
@@ -85,7 +85,7 @@ class ReconstructionDataModule(LightningDataModule):
             splits = ["test"]
 
         for split in splits:
-            setattr(self, f"{split}_set", ReconstructionDataset(scans=self.paths[split]["scans"],
+            setattr(self, f"{split}_set", RegionProposalDataset(scans=self.paths[split]["scans"],
                                                                 masks=self.paths[split]["masks"],
                                                                 ext=self.ext,
                                                                 resize_to=self.resize_to,
@@ -127,15 +127,16 @@ class ReconstructionDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        slices, head_masks = [], []
+        slices, targets, head_masks = [], [], []
 
         for el in batch:
             slices.append(el["scan_slice"])
+            targets.append(el["target"])
             head_masks.append(el["head_mask"])
 
         slices, head_masks = torch.stack(slices), torch.stack(head_masks)
 
-        return {"slices": slices.squeeze(2), "head_masks": head_masks.squeeze(2)}  # (B, C, H, W)
+        return {"slices": slices.squeeze(2), "targets": targets, "head_masks": head_masks.squeeze(2)}  # (B, C, H, W)
 
 
 class SegmentationDataModule(LightningDataModule):

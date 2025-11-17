@@ -12,6 +12,12 @@ from torchvision.transforms.v2.functional import to_pil_image
 from constants import HEAD_MASK_THRESHOLD
 
 
+def to_3channel(img):
+    if img.shape[0] == 1:
+        return img.repeat(3, 1, 1)
+    return img
+
+
 def resize(scans, masks, new_h: int, new_w: int):
     # with align_corners = False and antialias = True this is equivalent to PIL downsample method
     # shape must be (B, D*C, H, W) as anti-alias is restricted to 4-D tensors

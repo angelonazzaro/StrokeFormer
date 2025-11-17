@@ -2,7 +2,7 @@ import torch
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import WandbLogger
 
-from dataset import ReconstructionDataModule
+from dataset import RegionProposalDataModule
 from models import RPN
 
 
@@ -24,6 +24,6 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
     MyCLI(
         model_class=RPN,
-        datamodule_class=ReconstructionDataModule,
+        datamodule_class=RegionProposalDataModule,
         save_config_kwargs={"overwrite": True},
     )

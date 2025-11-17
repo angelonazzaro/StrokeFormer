@@ -1,21 +1,20 @@
-from functools import partial
-from typing import Literal, Optional
 from collections import OrderedDict
+from functools import partial
+from typing import Literal, Optional, List, Union
 
 import torch
-from torch import Tensor
-from torchmetrics.functional import accuracy, precision, recall, f1_score, peak_signal_noise_ratio as psnr, jaccard_index, matthews_corrcoef as mcc
-from torchmetrics.functional.image import structural_similarity_index_measure as ssim
-from torchmetrics.functional.segmentation import dice_score
-
 from distorch import pixel_center_metrics
-
+from torch import Tensor
+from torchmetrics.functional import accuracy, precision, recall, f1_score, jaccard_index, matthews_corrcoef as mcc
+from torchmetrics.functional.segmentation import dice_score
+from torchmetrics.detection.iou import IntersectionOverUnion
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from constants import HEAD_MASK_THRESHOLD
 from utils import get_lesion_size, generate_overlayed_slice, compute_head_mask, filter_sick_slices_per_volume
 
 
-def compute_metrics(preds: Tensor,
-                    targets: Tensor,
+def compute_metrics(preds: Union[List, Tensor],
+                    targets: Union[List, Tensor],
                     metrics: dict,
                     prefix: Optional[Literal["train", "val"]] = None,
                     task: Literal["segmentation", "region_proposal"] = "segmentation") -> dict:
@@ -29,28 +28,33 @@ def compute_metrics(preds: Tensor,
 
         preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
 
-    if preds.shape[0] > 0:
+    if len(preds) > 0 or preds.shape[0] > 0:
         for metric_name, metric in metrics.items():
-            score = torch.nan_to_num(metric["fn"](preds, targets), nan=metric["default_value"]).item()
-            if metric["default_value"] == float("inf") and score != float("inf"):
-                scores[prefix + metric_name] = score
+            score = metric["fn"](preds, targets)
+            if task == "segmentation":
+                score = torch.nan_to_num(score, nan=metric["default_value"])
+                if metric["default_value"] == float("inf") and score != float("inf"):
+                    scores[prefix + metric_name] = score
+                else:
+                    scores[prefix + metric_name] = score
             else:
-                scores[prefix + metric_name] = score
+                scores.update(**metric["fn"](preds, targets))
 
     return scores
 
 
-def build_metrics(num_classes: Optional[int] = None,
+def build_metrics(num_classes: int,
                   average: Literal["micro", "macro", "weighted", "none"] = "macro",
                   task: Literal["segmentation", "region_proposal"] = "segmentation",
                   inference: bool = False,
                   lesions_only: bool = True):
-    metrics = {}
+    task_type = "binary" if num_classes <= 2 else "multiclass"
+    metrics = {
 
+    }
+
+    task_specific_metrics = {}
     if task == "segmentation":
-        if num_classes is None:
-            raise ValueError("`num_classes` must be specified if `task` is `segmentation`.")
-        task_type = "binary" if num_classes <= 2 else "multiclass"
         task_specific_metrics = {
             "dice": {
                 "fn": partial(dice_score,
@@ -61,19 +65,21 @@ def build_metrics(num_classes: Optional[int] = None,
                               input_format="index"),
                 "default_value": 0.0
             },
-            "iou": {
-                "fn": partial(jaccard_index,
-                              num_classes=num_classes,
-                              task=task_type,
-                              ignore_index=0 if lesions_only else None,  # background is not included in metric computation
-                              average=average),
-                "default_value": 0.0,
-            },
+
             "mcc": {
                 "fn": partial(mcc,
                               num_classes=num_classes,
                               task=task_type,
                               ignore_index=0 if lesions_only else None),
+                "default_value": 0.0,
+            },
+            "iou": {
+                "fn": partial(jaccard_index,
+                              num_classes=num_classes,
+                              task=task_type,
+                              ignore_index=0 if lesions_only else None,
+                              # background is not included in metric computation
+                              average=average),
                 "default_value": 0.0,
             },
             "accuracy": {
@@ -139,13 +145,13 @@ def build_metrics(num_classes: Optional[int] = None,
                 }
     else:
         task_specific_metrics = {
-            "ssim": {
-                "fn": partial(ssim),
-                "default_value": 0.0
+            "iou": {
+                "fn": IntersectionOverUnion(),
+                "default_value": 0.0,
             },
-            "psnr": {
-                "fn": partial(psnr),
-                "default_value": 0.0
+            "map": {
+                "fn": MeanAveragePrecision(),
+                "default_value": 0.0,
             }
         }
 

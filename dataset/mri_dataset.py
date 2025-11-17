@@ -58,7 +58,7 @@ def load_data(scans: List[str],
     return scan, mask
 
 
-class ReconstructionDataset(Dataset):
+class RegionProposalDataset(Dataset):
     def __init__(
             self,
             scans: Union[List[str], str],
@@ -108,7 +108,7 @@ class ReconstructionDataset(Dataset):
         # if slice is healthy, create empty bounding boxes
         if mask.sum() == 0:
             boxes = torch.empty((0, 4), dtype=torch.int64)
-            labels = torch.zeros((1,), dtype=torch.int64)
+            labels = torch.empty((0, ), dtype=torch.int64)
             area = torch.zeros((0,), dtype=torch.int64)
         else:
             boxes = masks_to_boxes(mask)

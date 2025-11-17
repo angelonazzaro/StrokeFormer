@@ -10,6 +10,8 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.roi_heads import fastrcnn_loss
 from torchvision.models.detection.rpn import concat_box_prediction_layers
 
+from utils import build_metrics, compute_metrics
+
 
 def eval_forward(model, images, targets):
     """
@@ -129,6 +131,8 @@ class RPN(l.LightningModule):
         # replace the pre-trained head with a new one
         self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
+        self.metrics = build_metrics(2, task="region_proposal")
+
         self.save_hyperparameters()
 
     def forward(self, images: Tensor, targets: Optional[list]) -> Tensor:
@@ -141,15 +145,32 @@ class RPN(l.LightningModule):
             return self.model(images)
 
     def _common_step(self, batch, prefix: Literal["train", "val"]):
-        scans, targets = batch["slices"], batch["targets"]  # (B, C, H, W)
+        slices, targets = batch["slices"], batch["targets"]  # (B, C, H, W)
 
-        losses_dict, _ = self(scans, targets)
+        losses_dict, proposals = self(slices, targets)
 
         prefixed_loss_dict = {f"{prefix}_{name}": value for name, value in losses_dict.items()}
         prefixed_loss_dict[f"{prefix}_loss"] = sum(loss for loss in losses_dict.values())
 
+        preds = [
+            {
+                "boxes": p["boxes"],
+                "scores": p["scores"],
+                "labels": p["labels"]
+            }
+            for p in proposals
+        ]
+        targets = [
+            {
+                "boxes": t["boxes"],
+                "labels": t["labels"]
+            }
+            for t in targets
+        ]
+
         log_dict = {
             **prefixed_loss_dict,
+            **compute_metrics(preds, targets, metrics=self.metrics, task="region_proposal")
         }
 
         self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)

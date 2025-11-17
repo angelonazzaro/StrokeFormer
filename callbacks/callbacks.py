@@ -8,7 +8,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torchvision.transforms.v2.functional import to_pil_image
 from torchvision.utils import make_grid, draw_bounding_boxes
 
-from utils import get_per_slice_segmentation_preds
+from utils import get_per_slice_segmentation_preds, to_3channel
 
 
 class LogPrediction(Callback):
@@ -96,17 +96,12 @@ class LogPrediction(Callback):
 
     def _log_region_prediction(self, trainer: "pl.Trainer", model: "pl.LightningModule"):
         with torch.no_grad():
-            _, results = model(self.samples, self.targets)  # list of dicts: boxes, labels, scores
-
-        def to_3channel(img):
-            if img.shape[0] == 1:
-                return img.repeat(3, 1, 1)
-            return img
+            proposals = model(self.samples, None)  # list of dicts: boxes, labels, scores
 
         ground_truths = [draw_bounding_boxes(to_3channel(img), target["boxes"], colors="green").cpu() for img, target in
                          zip(self.samples, self.targets)]
-        predictions = [draw_bounding_boxes(to_3channel(img), result["boxes"], colors="red").cpu() for img, result in
-                       zip(self.samples, results)]
+        predictions = [draw_bounding_boxes(to_3channel(img), proposal["boxes"], colors="red").cpu() for img, proposal in
+                       zip(self.samples, proposals)]
         ground_truths = torch.stack(ground_truths)
         predictions = torch.stack(predictions)
 
