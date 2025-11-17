@@ -17,6 +17,7 @@ data/
 .vscode
 .zed
 augmented_scans.json
+augmentation_plan.json
 config.yaml
 
 # Results
