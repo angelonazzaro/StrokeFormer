@@ -92,7 +92,12 @@ class StrokeFormer(LightningModule):
                 with torch.no_grad():
                     # (1, D, H, W) -> (D, 1, H, W)
                     # this is a list of dicts: boxes, labels, scores
-                    proposals = self.rpn_model(x[i].permute(1, 0, 2, 3), None)
+                    curr_scan = x[i].permute(1, 0, 2, 3)
+                    num_slices = curr_scan.shape[0]
+                    stride = num_slices // 4
+                    proposals = []
+                    for j in range(0, num_slices, stride):
+                        proposals.extend(self.rpn_model(curr_scan[j:j+stride], None))
 
                 boxes = [torch.empty((0, 4), device=x.device)] * len(proposals)
                 min_slice_idx, max_slice_idx = None, None

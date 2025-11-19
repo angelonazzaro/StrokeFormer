@@ -17,7 +17,7 @@ def test(args):
     seed_everything(args.seed)
 
     model = RPN.load_from_checkpoint(args.ckpt_path)
-    # model = model.to(device=get_device())
+    model = model.to(device=get_device())
     model.eval()
     model_name = args.model_name or "_".join(args.ckpt_path.split(os.path.sep)[-1].split("-")[:2])
 
