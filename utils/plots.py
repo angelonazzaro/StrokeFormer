@@ -14,7 +14,8 @@ def plot_mri_slices(mri_volume, mask_volume=None, figsize=(14, 14)):
     # remove channel dimension if present
     if mri_volume.ndim == 4 and mri_volume.shape[0] == 1:
         mri_volume = mri_volume[0]
-        mask_volume = mask_volume[0]
+        if mask_volume is not None:
+            mask_volume = mask_volume[0]
     elif mri_volume.ndim != 3:
         raise ValueError("Input MRI must have shape (1, H, W, D) or (H, W, D).")
 
