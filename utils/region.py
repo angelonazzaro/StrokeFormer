@@ -1,98 +1,26 @@
 import torch
+from monai.inferers import SlidingWindowInferer
 from torch import Tensor
-
 from torchmetrics.functional.classification import jaccard_index
 
 
-import torch.nn.functional as F
-
-import torch
-import torch.nn.functional as F
-
 def sliding_window_inference_3d(region, model, roi_d, roi_h, roi_w, overlap=0.5):
+    # apply overlap only on dimensions exceeds their roi dimension
     C, D, H, W = region.shape
 
-    # --- Compute strides in all dimensions ---
-    stride_d = max(1, int(roi_d * (1 - overlap)))
-    stride_h = max(1, int(roi_h * (1 - overlap)))
-    stride_w = max(1, int(roi_w * (1 - overlap)))
+    z_overlap = overlap if D > roi_d else 0
+    y_overlap = overlap if H > roi_h else 0
+    x_overlap = overlap if W > roi_w else 0
 
-    # --- Output accumulators ---
-    output = torch.zeros(1, 2, D, H, W, device=region.device)
-    weight = torch.zeros(1, 1, D, H, W, device=region.device)
+    inferer = SlidingWindowInferer(
+        roi_size=(roi_d, roi_h, roi_w),
+        sw_batch_size=1,
+        overlap=(z_overlap, y_overlap, x_overlap),
+        progress=False,
+        mode="gaussian"
+    )
 
-    # --- 3D blending window (roi_d × roi_h × roi_w) ---
-    bd = torch.linspace(0, 1, roi_d, device=region.device)
-    bh = torch.linspace(0, 1, roi_h, device=region.device)
-    bw = torch.linspace(0, 1, roi_w, device=region.device)
-
-    bd = torch.minimum(bd, 1 - bd) * 2.0 + 1e-6
-    bh = torch.minimum(bh, 1 - bh) * 2.0 + 1e-6
-    bw = torch.minimum(bw, 1 - bw) * 2.0 + 1e-6
-
-    blend = (
-        bd.view(roi_d, 1,      1) *
-        bh.view(1,     roi_h,  1) *
-        bw.view(1,     1,      roi_w)
-    )  # shape (roi_d, roi_h, roi_w)
-
-    blend = blend.view(1, 1, roi_d, roi_h, roi_w)
-
-    # --- Sliding window loops ---
-    for z in range(0, D, stride_d):
-        for y in range(0, H, stride_h):
-            for x in range(0, W, stride_w):
-
-                # Compute window ends
-                z2 = z + roi_d
-                y2 = y + roi_h
-                x2 = x + roi_w
-
-                window = region[:,
-                                z:min(z2, D),
-                                y:min(y2, H),
-                                x:min(x2, W)]
-
-                # Pad if window touches boundary
-                pd = roi_d - window.shape[1]
-                ph = roi_h - window.shape[2]
-                pw = roi_w - window.shape[3]
-
-                if pd > 0 or ph > 0 or pw > 0:
-                    window = F.pad(
-                        window,
-                        (0, pw,   # width
-                         0, ph,   # height
-                         0, pd),  # depth
-                        mode="constant",
-                        value=0
-                    )
-
-                # Add batch dim
-                logits = model(window.unsqueeze(0))  # (1,2,roi_d,roi_h,roi_w)
-
-                # Determine how much is valid (avoid padded area)
-                valid_d = min(roi_d, D - z)
-                valid_h = min(roi_h, H - y)
-                valid_w = min(roi_w, W - x)
-
-                logits = logits[:, :, :valid_d, :valid_h, :valid_w]
-                local_blend = blend[:, :, :valid_d, :valid_h, :valid_w]
-
-                # Accumulate
-                output[:, :,
-                       z:z+valid_d,
-                       y:y+valid_h,
-                       x:x+valid_w] += logits * local_blend
-
-                weight[:, :,
-                       z:z+valid_d,
-                       y:y+valid_h,
-                       x:x+valid_w] += local_blend
-
-    # Normalize
-    output = output / torch.clamp(weight, min=1e-6)
-    return output
+    return inferer(region.unsqueeze(0), network=model).squeeze(0)
 
 def expand_boxes(boxes: Tensor, bounds: tuple[int, int], roi_size: tuple[int, int]):
     H, W = bounds
