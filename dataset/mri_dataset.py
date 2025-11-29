@@ -1,14 +1,16 @@
 import os
+import re
 from glob import glob
 from typing import Optional, List, Callable, Union
 
 import einops
 import numpy as np
 import torch
+from scipy import ndimage
 from torch import Tensor
 from torch.utils.data import IterableDataset, Dataset
 from torchvision import tv_tensors
-from torchvision.ops import masks_to_boxes
+from torchvision.ops import masks_to_boxes, box_area
 from torchvision.transforms import v2
 
 from utils import extract_patches, round_half_up, compute_head_mask, resize, expand_boxes
@@ -73,13 +75,17 @@ class RegionProposalDataset(Dataset):
 
         self.scans, self.masks = init_scans_masks_filepaths(scans, masks, ext)
 
-        self.augment = augment
+        # sort slices by their subject id, session id and slice number
+        def extract_sort_keys(filepath):
+            subject = int(re.search(r'r(\d+)', filepath).group(1))
+            session = int(re.search(r's(\d+)', filepath).group(1))
+            slice_num = int(re.search(r'_slice_(\d+)', filepath).group(1))
+            return subject, session, slice_num
 
-        # permute slices to destroy 'brain ordering', i.e., slices are loaded in order within the same brain
-        # this could lead the models to learn a sort of ordering bias
-        perm = np.random.permutation(len(self.scans))
-        self.scans = [self.scans[i] for i in perm]
-        self.masks = [self.masks[i] for i in perm]
+        self.scans = sorted(self.scans, key=extract_sort_keys)
+        self.masks = sorted(self.masks, key=extract_sort_keys)
+
+        self.augment = augment
 
         self.bb_min_size = bb_min_size
         self.resize_to = resize_to
@@ -104,18 +110,19 @@ class RegionProposalDataset(Dataset):
             scan_slice, mask = scan_slice.squeeze(0).squeeze(0), mask.squeeze(0).squeeze(0).to(torch.int64)
 
         head_mask = compute_head_mask(scan_slice)
+        labeled_mask, num_objects = ndimage.label(mask)
+        obj_ids = np.unique(labeled_mask)
+        obj_ids = obj_ids[1:] # remove background
+        mask = torch.from_numpy(labeled_mask == obj_ids[:, None, None]).to(dtype=torch.uint8) # (num_objects, H, W)
+        boxes = masks_to_boxes(mask)
+        area = box_area(boxes)
 
         # if slice is healthy, create empty bounding boxes
         if mask.sum() == 0:
-            boxes = torch.empty((0, 4), dtype=torch.int64)
             labels = torch.empty((0, ), dtype=torch.int64)
-            area = torch.zeros((0,), dtype=torch.int64)
         else:
-            boxes = masks_to_boxes(mask)
-            boxes = expand_boxes(boxes, self.bb_min_size)
-
-            labels = torch.ones((1,), dtype=torch.int64)
-            area = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
+            boxes = expand_boxes(boxes, self.resize_to, self.bb_min_size)
+            labels = torch.ones((mask.shape[0],), dtype=torch.int64)
 
         scan_slice = (scan_slice - scan_slice.mean()) / scan_slice.std()
         scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())

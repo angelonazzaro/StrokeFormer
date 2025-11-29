@@ -1,5 +1,5 @@
 # lightning.pytorch==2.5.5
-seed_everything: true
+seed_everything: 42
 trainer:
   accelerator: auto
   strategy: auto
@@ -9,14 +9,14 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: unet-xs
+      name: faster-cnn-no-std
       save_dir: .
       version: null
       offline: false
       dir: null
       id: null
       anonymous: null
-      project: UNet-Recons
+      project: RPN
       log_model: false
       experiment: null
       prefix: ''
@@ -44,14 +44,14 @@ trainer:
   callbacks:
     - class_path: callbacks.LogPrediction
       init_args:
-        num_samples: 3
+        num_samples: 32
         log_every_n_epochs: 15
         task: region_proposal
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
         min_delta: 0.001
-        patience: 25
+        patience: 75
         verbose: true
         mode: min
         strict: true
@@ -63,7 +63,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: null
-        filename: unet-xs-{epoch:02d}-{val_loss:.2f}
+        filename: faster-cnn-no-std-{epoch:02d}-{val_loss:.2f}
         monitor: val_loss
         verbose: true
         save_last: null
@@ -78,7 +78,7 @@ trainer:
         save_on_train_epoch_end: true
         enable_version_counter: true
   fast_dev_run: false
-  max_epochs: null
+  max_epochs: 500
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -108,7 +108,7 @@ trainer:
   plugins: null
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: UNet-Recons
+  default_root_dir: RPN
   model_registry: null
 model:
   lr: 0.0001
@@ -118,8 +118,13 @@ model:
   - 0.999
   weight_decay: 0.0001
 data:
-  scans: data/ATLAS_2/Processed/2D/Scans2D
-  masks: data/ATLAS_2/Processed/2D/Masks2D
+  paths:
+    train:
+      scans: data/ATLAS_2/Processed/2D/Splits/Train/Scans
+      masks: data/ATLAS_2/Processed/2D/Splits/Train/Masks
+    val:
+      scans: data/ATLAS_2/Processed/2D/Splits/Val/Scans
+      masks: data/ATLAS_2/Processed/2D/Splits/Val/Masks
   ext: .npy
   resize_to:
     - 128

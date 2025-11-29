@@ -147,33 +147,40 @@ class RPN(l.LightningModule):
     def _common_step(self, batch, prefix: Literal["train", "val"]):
         slices, targets = batch["slices"], batch["targets"]  # (B, C, H, W)
 
-        losses_dict, proposals = self(slices, targets)
+        # torchvision model return a dictionary containing the losses during training mode
+        # getting the predictions would be setting the model to eval and perform another forward step
+        output = self.forward(slices, targets)
+        if type(output) == dict:
+            losses_dict = output
+        else:
+            losses_dict, proposals = output
 
         prefixed_loss_dict = {f"{prefix}_{name}": value for name, value in losses_dict.items()}
         prefixed_loss_dict[f"{prefix}_loss"] = sum(loss for loss in losses_dict.values())
 
-        preds = [
-            {
-                "boxes": p["boxes"],
-                "scores": p["scores"],
-                "labels": p["labels"]
-            }
-            for p in proposals
-        ]
-        targets = [
-            {
-                "boxes": t["boxes"],
-                "labels": t["labels"]
-            }
-            for t in targets
-        ]
-
         log_dict = {
             **prefixed_loss_dict,
-            **compute_metrics(preds, targets, metrics=self.metrics, task="region_proposal")
         }
 
-        self.log_dict(dictionary=log_dict, on_step=False, prog_bar=True, on_epoch=True)
+        # if type(output) == tuple:
+        #     preds = [
+        #         {
+        #             "boxes": p["boxes"],
+        #             "scores": p["scores"],
+        #             "labels": p["labels"]
+        #         }
+        #         for p in proposals
+        #     ]
+        #     targets = [
+        #         {
+        #             "boxes": t["boxes"],
+        #             "labels": t["labels"]
+        #         }
+        #         for t in targets
+        #     ]
+        #     log_dict.update(**compute_metrics(preds, targets, metrics=self.metrics, prefix=prefix, task="region_proposal"))
+
+        self.log_dict(dictionary=log_dict, batch_size=slices.shape[0], on_step=False, prog_bar=True, on_epoch=True)
 
         return prefixed_loss_dict[f"{prefix}_loss"]
 

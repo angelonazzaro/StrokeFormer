@@ -34,9 +34,9 @@ def compute_metrics(preds: Union[List, Tensor],
             if task == "segmentation":
                 score = torch.nan_to_num(score, nan=metric["default_value"])
                 if metric["default_value"] == float("inf") and score != float("inf"):
-                    scores[prefix + metric_name] = score
+                    scores[prefix + metric_name] = score.item()
                 else:
-                    scores[prefix + metric_name] = score
+                    scores[prefix + metric_name] = score.item()
             else:
                 scores.update(**metric["fn"](preds, targets))
 

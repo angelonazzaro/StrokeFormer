@@ -43,18 +43,12 @@ def test(args):
 
     os.makedirs(model_prediction_dir, exist_ok=True)
     global_scores = {}
-    for metric_name in metrics.keys():
-        global_scores[metric_name] = {
-            "ca": 0.0,
-            "n": 0,
-        }
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Reconstructing brains")):
+
+    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Proposing regions")):
         slices, targets = batch["slices"], batch["targets"]
         targets = [{k: v.to(model.device) for k, v in t.items()} for t in targets]
         slices = slices.to(device=model.device)
-
-        preds_until_now = batch_idx * slices.shape[0]
 
         with torch.no_grad():
             proposals = model(slices, None)
@@ -78,16 +72,23 @@ def test(args):
         # focus the metrics computation on brain regions only
         scores = compute_metrics(preds, targets, metrics, task="region_proposal")
 
-        # CA update rule: (x_n+1 + n * CA_n) / (n + 1)
-        for metric_name in global_scores.keys():
-            curr_ca = global_scores[metric_name]["ca"]
-            curr_n = global_scores[metric_name]["n"]
-            global_scores[metric_name] = {
-                "ca": (scores[metric_name] + curr_n * curr_ca) / (curr_n + 1),
-                "n": curr_n + 1
-            }
+        if len(global_scores) == 0:
+            for metric_name in scores.keys():
+                global_scores[metric_name] = {
+                    "ca": scores[metric_name],
+                    "n": 1,
+                }
+        else:
+            # CA update rule: (x_n+1 + n * CA_n) / (n + 1)
+            for metric_name in global_scores.keys():
+                curr_ca = global_scores[metric_name]["ca"]
+                curr_n = global_scores[metric_name]["n"]
+                global_scores[metric_name] = {
+                    "ca": (scores[metric_name] + curr_n * curr_ca) / (curr_n + 1),
+                    "n": curr_n + 1
+                }
 
-        if args.n_predictions > preds_until_now:
+        if args.n_predictions > batch_idx:
             ground_truths = [draw_bounding_boxes(to_3channel(img), target["boxes"], colors="green").cpu() for img, target in zip(slices, targets)]
             predictions = [draw_bounding_boxes(to_3channel(img), proposal["boxes"], colors="red").cpu() for img, proposal in zip(slices, proposals)]
             ground_truths = torch.stack(ground_truths)

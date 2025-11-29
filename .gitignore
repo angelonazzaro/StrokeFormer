@@ -28,6 +28,7 @@ lightning_logs/
 StrokeFormer/
 anoddpm
 AnoDDPM
+RPN
 
 # CarveMix
 *.csv
