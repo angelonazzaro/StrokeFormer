@@ -1,16 +1,15 @@
 import sys
-from typing import Optional, Literal, Union, List
-from functools import partial
+from typing import Optional, Literal, Union
 
 import einops
-import monai.losses
+import monai
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from monai.losses import DiceLoss
-from torchmetrics.functional.segmentation import dice_score
+from torch import Tensor
 
-from utils import filter_sick_slices_per_volume
-from .ici_tools import connected_components, connected_components_with_gradients, get_corrected_indices
+from .ici_tools import connected_components_with_gradients, connected_components, get_corrected_indices
 
 _MODULES = [monai.losses, nn, sys.modules[__name__]]
 
@@ -41,13 +40,13 @@ def instantiate_loss(loss: str, config: Optional[dict] = None):
         config = {}
 
     for key in config.keys():
-        if "weight" in key and not isinstance(config[key], torch.Tensor):
+        if "weight" in key and not isinstance(config[key], Tensor):
             config[key] = torch.tensor(config[key])
 
-    return loss_cls(**config)
+    return loss_cls(**config)  # noqa
 
 
-class ICILoss(torch.nn.modules.loss._Loss):
+class ICILoss(nn.Module):
     """
     Compute Instance-wise and Center-of-Instance (ICI) segmentation loss between two tensors.
     The data `outputs` (BNHW[D] where N is number of classes) is compared with ground truth `labels` (BNHW[D]).
@@ -313,7 +312,6 @@ class ICILoss(torch.nn.modules.loss._Loss):
 
         Example:
             >>> import torch
-            >>> from ICILoss.ICI_loss import ICILoss
             >>> from monai.losses import DiceLoss
             >>> from monai.data.synthetic import create_test_image_3d
             >>> loss_dice = DiceLoss(
@@ -785,146 +783,74 @@ class ICILoss(torch.nn.modules.loss._Loss):
 
 class SegmentationLoss(nn.Module):
     def __init__(self,
-                 seg_loss: Optional[str] = "ICILoss",
+                 seg_loss: str,
                  seg_loss_cfg: Optional[dict] = None,
-                 cls_loss: str = "BCEWithLogitsLoss",
+                 seg_loss_weight: float = 0.5,
+                 cls_loss: Optional[str] = "CrossEntropyLoss",
                  cls_loss_cfg: Optional[dict] = None,
-                 loss_weights: tuple[float, float] = (0.5, 0.5),
-                 ici_weights: Optional[tuple[float, float, float]] = (0.25, 0.5, 0.25)):
+                 cls_loss_weight: float = 0.5):
         super().__init__()
-
-        def _check_weights(weights: List[float]):
-            weights_sum = 0
-            for w in weights:
-                if w < 0 or w > 1:
-                    raise ValueError(f"Weights should be between 0 and 1, but got {w}")
-
-                weights_sum += w
-                if weights_sum > 1.0:
-                    raise ValueError(f"Weights should add up to 1, got: {weights_sum}")
-
-        _check_weights(list(loss_weights))
-        _check_weights(list(ici_weights))
-
-        if seg_loss == "ICILoss" or seg_loss is None:
-            # overwrite seg_loss_config
-            seg_loss = "ICILoss"
-            dice_loss = monai.losses.DiceLoss(to_onehot_y=False, softmax=False, sigmoid=False)
-            seg_loss_cfg = {
-                "loss_function_pixel": dice_loss,
-                "loss_function_instance": dice_loss,
-                "loss_function_center": dice_loss,
-                "num_out_chn": 1,
-                "object_chn": 1,
-                "activation": "sigmoid",
-            }
 
         self.seg_loss = instantiate_loss(seg_loss, seg_loss_cfg)
 
-        self.cls_loss = instantiate_loss(cls_loss, cls_loss_cfg)
-        self.loss_weights = loss_weights
-        self.ici_weights = ici_weights
+        if cls_loss is None:
+            self.cls_loss = None
+        else:
+            self.cls_loss = instantiate_loss(cls_loss, cls_loss_cfg)
 
-    def forward(
-            self,
-            predictions: torch.Tensor,
-            targets: torch.Tensor,
-            prefix: Optional[Literal['train', 'val', 'test']] = None,
-            return_dict: bool = False
-    ) -> Union[torch.Tensor, dict]:
+        if seg_loss_weight < 0:
+            raise ValueError("seg_loss_weight should be non-negative")
+
+        if cls_loss_weight < 0:
+            raise ValueError("cls_loss_weight should be non-negative")
+
+        if seg_loss_weight + cls_loss_weight != 1:
+            raise ValueError(f"`seg_loss_weight` and `cls_loss_weight` are mutually exclusive and must sum to 1.")
+
+        self.seg_loss_weight = seg_loss_weight
+        self.cls_loss_weight = cls_loss_weight
+
+    def forward(self, logits: Tensor, targets: Tensor,
+                prefix: Optional[Literal['train', 'val', 'test']] = None,
+                return_dict: bool = False) -> Union[dict, Tensor]:
         """
-        Args:
-            predictions: segmentation predictions (B, 2, D, H, W) or (B, C, 2, D, H, W)
-            targets: Ground-truth segmentation mask (B, 2, D, H, W) or (B, C, 2, D, H, W)
-            prefix: Prefix of training/inference step. Can be either 'train', 'val', 'test'.
-            return_dict: If True, returns dict with separate losses.
+               Args:
+                   logits: segmentation predictions (B, 2, D, H, W)
+                   targets: Ground-truth segmentation mask (B, D, H, W)
+                   prefix: Prefix of training/inference step. Can be either 'train', 'val', 'test'.
+                   return_dict: If True, returns dict with separate losses.
         """
-        assert predictions.shape == targets.shape, "Predictions and targets must have the same shape"
+        logits_cf = logits  # cl stands for channel (D) first
+        targets_cf = targets
 
-        # always compute classification loss
-        cls_loss = self.cls_loss(predictions, targets)
+        if self.cls_loss is not None:
+            cls_loss = self.cls_loss(logits_cf, targets_cf)
 
-        # segmentation loss (only if lesion exists). this should help the models to focus on segmenting
-        # slices that actually contain lesions
-        seg_loss = torch.tensor(0.0, requires_grad=True, device=predictions.device)
+        if "monai" in str(type(self.seg_loss)):
+            # monai losses expect tensors to be in shape BNHW[D]
+            logits_cl = einops.rearrange(logits, "b n d h w -> b n h w d")
+            targets_cl = F.one_hot(targets_cf, logits_cl.shape[1]).to(dtype=torch.long)  # B, D, H, W, N
+            targets_cl = einops.rearrange(targets_cl, "b d h w n -> b n h w d")
+        else:
+            logits_cl = logits_cf
+            targets_cl = targets_cf
 
-        predictions, targets = filter_sick_slices_per_volume(predictions, targets)
+        seg_loss = self.seg_loss(logits_cl, targets_cl.float())
 
-        if predictions.shape[0] > 0:
-            if self.seg_loss.__class__.__name__ == "ICILoss":
-                if predictions.ndim == 6:
-                    predictions = predictions.squeeze(2)
-                    targets = targets.squeeze(2)
-
-                predictions = einops.rearrange(predictions, "B N D H W -> B N H W D")
-                targets = einops.rearrange(targets, "B N D H W -> B N H W D")
-
-                predictions = predictions[:, 1:]
-                targets = targets[:, 1:]
-
-            seg_loss = self.seg_loss(predictions, targets)
-
-            if self.seg_loss.__class__.__name__ == "ICILoss":
-                seg_loss = seg_loss[0] * self.ici_weights[0] + seg_loss[1] * self.ici_weights[1] + seg_loss[2] * \
-                           self.ici_weights[2]
-
-        total_loss = self.loss_weights[0] * seg_loss + self.loss_weights[1] * cls_loss
-
-        prefix = f"{prefix}_" if prefix is not None else ""
+        if self.cls_loss is not None:
+            loss = self.seg_loss_weight * seg_loss + self.cls_loss_weight * cls_loss
+        else:
+            loss = seg_loss
 
         if return_dict:
-            return {
-                f"{prefix}loss": total_loss,
-                f"{prefix}{self.cls_loss.__class__.__name__}": cls_loss,
-                f"{prefix}{self.seg_loss.__class__.__name__}": seg_loss,
+            loss_dict = {
+                f"{prefix}_loss": loss,
+                f"{prefix}_{self.seg_loss.__class__.__name__}": seg_loss,
             }
 
-        return total_loss
+            if self.cls_loss is not None:
+                loss_dict[f"{prefix}_{self.cls_loss.__class__.__name__}"] = cls_loss
 
-
-class BinaryDiceLoss(torch.nn.Module):
-    def __init__(self,
-                 num_classes: int,
-                 include_background: bool = False,
-                 apply_sigmoid: bool = True,
-                 input_format: Literal["one-hot", "index", "mixed"] = "index",
-                 average: Optional[Literal["micro", "macro", "weighted", "none"]] = "macro",
-                 aggregation_level: Optional[Literal["samplewise", "global"]] = "global"):
-        super(BinaryDiceLoss, self).__init__()
-
-        self.num_classes = num_classes
-        self.include_background = include_background
-        self.average = average
-        self.aggregation_level = aggregation_level
-        self.apply_sigmoid = apply_sigmoid
-
-        self.dice = partial(dice_score, include_background=include_background, num_classes=num_classes,
-                            input_format=input_format, average=average, aggregation_level=aggregation_level)
-
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Computes the Dice loss between the predicted and target binary tensors.
-
-        Args:
-            predictions (torch.Tensor): A tensor of shape [N, C, *], where N is the batch size, C is the number of classes,
-                and * is the spatial dimensions.
-            targets (torch.Tensor): A tensor of the same shape as the predicted tensor.
-
-        Returns:
-            Loss tensor according to arg reduction.
-
-        Raises:
-            AssertionError: If the batch sizes of the predicted and target tensors do not match.
-            Exception: If unexpected target not in [0, 1] range.
-        """
-        assert predictions.shape[0] == targets.shape[0], "BinaryDiceLoss: predictions & targets' batch sizes don't match"
-
-        if targets.unique().tolist() != [0, 1]:
-            raise ValueError(f"BinaryDiceLoss: target expected in [0, 1] range but got {targets.unique()}")
-
-        if self.apply_sigmoid:
-            predictions = torch.sigmoid(predictions)
-            predictions = predictions.argmax(dim=1)
-            targets = targets.argmax(dim=1)
-
-        return 1 - self.dice(predictions, targets)
+            return loss_dict
+        else:
+            return loss
