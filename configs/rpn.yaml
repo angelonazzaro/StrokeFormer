@@ -9,7 +9,7 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: faster-cnn-no-std
+      name: faster-cnn-mobilenet-small-v3-tuned-anchors-ISLES-DWI-sick-only-no-pretrain-normal
       save_dir: .
       version: null
       offline: false
@@ -47,11 +47,16 @@ trainer:
         num_samples: 32
         log_every_n_epochs: 15
         task: region_proposal
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+        log_momentum: false
+        log_weight_decay: false
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
         min_delta: 0.001
-        patience: 75
+        patience: 100
         verbose: true
         mode: min
         strict: true
@@ -63,7 +68,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: null
-        filename: faster-cnn-no-std-{epoch:02d}-{val_loss:.2f}
+        filename: faster-cnn-mobilenet-small-v3-tuned-anchors-ISLES-DWI-sick-only-no-pretrain-normal-{epoch:02d}-{val_loss:.2f}
         monitor: val_loss
         verbose: true
         save_last: null
@@ -120,15 +125,15 @@ model:
 data:
   paths:
     train:
-      scans: data/ATLAS_2/Processed/2D/Splits/Train/Scans
-      masks: data/ATLAS_2/Processed/2D/Splits/Train/Masks
+      scans: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Train/Scans
+      masks: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Train/Masks
     val:
-      scans: data/ATLAS_2/Processed/2D/Splits/Val/Scans
-      masks: data/ATLAS_2/Processed/2D/Splits/Val/Masks
+      scans: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Val/Scans
+      masks: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Val/Masks
   ext: .npy
   resize_to:
-    - 128
-    - 128
+    - 224
+    - 224
   transforms: null
   batch_size: 32
   num_workers: 0

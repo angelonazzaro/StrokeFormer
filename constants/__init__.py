@@ -2,3 +2,17 @@ SCAN_DIM = (1, 189, 192, 192)  # C, D, H, W
 SLICE_DIM = (1, 192, 192)
 HEAD_MASK_THRESHOLD = 8.0
 LESION_SIZES = ["No Lesion", "Small", "Medium", "Large"]
+DATASET_ANCHORS = {
+    "ATLAS": {
+        "sizes": ((5, 32, 54, 93),),
+        "aspect_ratios": ((1.0),),
+    },
+    "ISLES-DWI": {
+        "sizes": ((7, 10, 20), ),
+        "aspect_ratios": ((1.0), ),
+    },
+    "ISLES-FLAIR": {
+        "sizes": ((5, 12, 23, 84),),
+        "aspect_ratios": ((1.0)),
+    },
+}

@@ -2,6 +2,7 @@ import os
 from typing import Optional, List, Callable
 
 import torch
+import torch.nn.functional as F
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
@@ -98,7 +99,7 @@ class RegionProposalDataModule(LightningDataModule):
             self.train_set,
             num_workers=self.num_workers,
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=True,
             collate_fn=self.custom_collate,
             pin_memory=True,
             persistent_workers=self.num_workers > 0
@@ -147,6 +148,7 @@ class SegmentationDataModule(LightningDataModule):
                  overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
+                 regions: Optional[str] = None,
                  resize_to: Optional[tuple[int, int]] = None,
                  batch_size: int = 32,
                  num_workers: Optional[int] = 0):
@@ -161,6 +163,7 @@ class SegmentationDataModule(LightningDataModule):
         self.overlap = overlap
         self.transforms = transforms
         self.augment = augment
+        self.regions = regions
 
         self.resize_to = resize_to
         self.batch_size = batch_size
@@ -182,6 +185,7 @@ class SegmentationDataModule(LightningDataModule):
                                                               masks=self.paths[split]["masks"],
                                                               ext=self.ext,
                                                               augment=self.augment if split == "train" else False,
+                                                              regions=self.regions,
                                                               overlap=self.overlap,
                                                               subvolume_depth=self.subvolume_depth,
                                                               transforms=transforms))
@@ -215,9 +219,11 @@ class SegmentationDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, masks, head_masks, means, stds, mins_maxs = [], [], [], [], [], []
+        scans, masks, head_masks, means, regions, stds, mins_maxs = [], [], [], [], [], [], []
+        max_D = float("-inf")
 
         for el in batch:
+            max_D = max(max_D, el["scan"].shape[1])
             scans.append(el["scan"])
             head_masks.append(el["head_mask"])
             masks.append(el["mask"])
@@ -225,19 +231,45 @@ class SegmentationDataModule(LightningDataModule):
             stds.append(el["std"])
             mins_maxs.append(el["min_max"])
 
-        scans, masks = torch.stack(scans), torch.stack(masks)  # batched tensors (B, C, D, H, W)
+            el_regions = el.get("regions", None)
+            if el_regions is not None:
+                regions.append(el_regions)
+
+        def pad_to_shape(x, tgt_shape):
+            _, d, h, w = x.shape
+            _, td, th, tw = tgt_shape
+
+            pd = td - d
+            ph = th - h
+            pw = tw - w
+
+            return F.pad(x, (0, pw, 0, ph, 0, pd))
+
+        # Final target shape (C, D, H, W)
+        C = scans[0].shape[0]
+        target_shape = (C, max_D, scans[0].shape[-2], scans[0].shape[-1])
+
+        # Pad scans, masks, head_masks
+        scans = torch.stack([pad_to_shape(x, target_shape) for x in scans])  # batched tensors (B, C, D, H, W)
+        masks = torch.stack([pad_to_shape(x, target_shape) for x in masks])
+        head_masks = torch.stack([pad_to_shape(x, target_shape) for x in head_masks])
         means, stds = torch.stack(means), torch.stack(stds)  # (B)
-        head_masks, mins_maxs = torch.stack(head_masks), torch.tensor(mins_maxs)
+        mins_maxs = torch.tensor(mins_maxs)
 
         if self.resize_to is not None:
             _, masks = resize(scans, masks, *self.resize_to)
             scans, head_masks = resize(scans, head_masks, *self.resize_to)
 
-        return {
+        batch = {
             "scans": scans,
             "head_masks": head_masks,
-            "masks": masks,
+            "masks": masks.squeeze(1),
             "means": means,
             "stds": stds,
             "mins_maxs": mins_maxs
         }
+
+        if len(regions) > 0:
+            batch["regions"] = regions
+
+        return batch

@@ -2,18 +2,22 @@ from collections import OrderedDict
 from typing import Literal, Optional, List
 
 import lightning as l
+import numpy as np
 import torch
 import torch.optim as optim
 import torchvision
 from torch import Tensor
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FasterRCNN
 from torchvision.models.detection.roi_heads import fastrcnn_loss
+from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection.rpn import concat_box_prediction_layers
+from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
-from utils import build_metrics, compute_metrics
+from constants import DATASET_ANCHORS
+from utils import build_metrics
 
 
-def eval_forward(model, images, targets):
+def detection_forward(model, images, targets):
     """
     Args:
         images (list[Tensor]): images to be processed
@@ -23,8 +27,6 @@ def eval_forward(model, images, targets):
             It returns list[BoxList] contains additional fields
             like `scores`, `labels` and `mask` (for Mask R-CNN models).
     """
-    model.eval()
-
     original_image_sizes: List[tuple[int, int]] = []
     for img in images:
         val = img.shape[-2:]
@@ -51,7 +53,6 @@ def eval_forward(model, images, targets):
     features = model.backbone(images.tensors)
     if isinstance(features, torch.Tensor):
         features = OrderedDict([("0", features)])
-    model.rpn.training=True
 
     features_rpn = list(features.values())
     objectness, pred_bbox_deltas = model.rpn.head(features_rpn)
@@ -90,7 +91,8 @@ def eval_forward(model, images, targets):
     detector_losses = {}
     loss_classifier, loss_box_reg = fastrcnn_loss(class_logits, box_regression, labels, regression_targets)
     detector_losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
-    boxes, scores, labels = model.roi_heads.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
+    boxes, scores, labels = model.roi_heads.postprocess_detections(class_logits, box_regression, proposals,
+                                                                   image_shapes)
     num_images = len(boxes)
     for i in range(num_images):
         result.append(
@@ -101,9 +103,7 @@ def eval_forward(model, images, targets):
             }
         )
     detections = result
-    detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # noqa
-    model.rpn.training=False
-    model.roi_heads.training=False
+    # detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # noqa
     losses = {}
     losses.update(detector_losses)
     losses.update(proposal_losses)
@@ -116,6 +116,8 @@ class RPN(l.LightningModule):
                  lr: float = 1e-4,
                  eps: float = 1e-8,
                  betas: tuple[float, float] = (0.9, 0.999),
+                 dataset_anchors: Literal["ATLAS", "ISLES-DWI", "ISLES-FLAIR"] = "ATLAS",
+                 backbone_weights: Optional[Literal["DEFAULT"]] = "DEFAULT",
                  weight_decay: float = 1e-4):
         super().__init__()
 
@@ -123,62 +125,109 @@ class RPN(l.LightningModule):
         self.betas = betas
         self.eps = eps
         self.weight_decay = weight_decay
+        self.dataset_anchors = dataset_anchors
 
-        self.model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
-        num_classes = 2  # 1 class (lesion) + background
+        backbone = torchvision.models.mobilenet_v3_small(weights=backbone_weights).features
+
+        if backbone_weights is not None:
+            # https://www.mdpi.com/1424-8220/23/21/8763
+            # https://link.springer.com/chapter/10.1007/978-3-031-37745-7_2
+            averaged_weight = backbone[0][0].weight.mean(dim=1, keepdim=True)
+            averaged_weight = torch.nn.Parameter(averaged_weight)
+
+        backbone[0][0] = torch.nn.Conv2d(1, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+
+        if backbone_weights is not None:
+            backbone[0][0].weight = averaged_weight
+
+        x = torch.randn(1, 1, 224, 224)
+        out = backbone(x)
+
+        if isinstance(out, dict):
+            first_key = list(out.keys())[0]
+            channels = out[first_key].shape[1]
+        else:
+            channels = out.shape[1]
+
         # get number of input features for the classifier
-        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+        backbone.out_channels = channels
+        num_classes = 2  # 1 class (lesion) + background
+
+        anchor_generator = AnchorGenerator(
+            sizes=DATASET_ANCHORS[dataset_anchors]["sizes"],
+            aspect_ratios=DATASET_ANCHORS[dataset_anchors]["aspect_ratios"]
+        )
+
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(
+            featmap_names=['0'],
+            output_size=7,
+            sampling_ratio=2
+        )
+
         # replace the pre-trained head with a new one
-        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        self.model = FasterRCNN(backbone, num_classes, rpn_anchor_generator=anchor_generator, roi_pooler=roi_pooler)
+
+        self.model.transform = GeneralizedRCNNTransform(
+            min_size=(800,),
+            max_size=1333,
+            image_mean=[0.0],  # 1-channel mean
+            image_std=[1.0],  # 1-channel std
+        )
+
+        if backbone_weights is None:
+            # https://stackoverflow.com/questions/49433936/how-do-i-initialize-weights-in-pytorch
+            def init_weights(m):
+                if isinstance(m, torch.nn.Module) and hasattr(m, "weight") and (
+                        hasattr(m, "in_channels") or hasattr(m, "in_features")):
+                    if isinstance(m, torch.nn.Conv2d):
+                        y = m.in_channels
+                    else:
+                        y = m.in_features
+
+                    m.weight.data.normal_(0.0, 1.0 / np.sqrt(y))
+
+            self.model.apply(init_weights)
 
         self.metrics = build_metrics(2, task="region_proposal")
 
         self.save_hyperparameters()
 
-    def forward(self, images: Tensor, targets: Optional[list]) -> Tensor:
+    def forward(self, images: Tensor, targets: Optional[list] = None) -> Tensor:
         if targets is not None:
-            if self.training:
-                return self.model(images, targets)
-            else:
-                return eval_forward(self.model, images, targets)
+            # this function is necessary because torchvision models are supposed to return (losses, predictions)
+            # during training and (predictions) during evaluation
+            # for some reason, the model is returning predictions only during training
+            return detection_forward(self.model, images, targets)
         else:
             return self.model(images)
 
     def _common_step(self, batch, prefix: Literal["train", "val"]):
         slices, targets = batch["slices"], batch["targets"]  # (B, C, H, W)
 
-        # torchvision model return a dictionary containing the losses during training mode
-        # getting the predictions would be setting the model to eval and perform another forward step
-        output = self.forward(slices, targets)
-        if type(output) == dict:
-            losses_dict = output
-        else:
-            losses_dict, proposals = output
+        losses_dict, proposals = self.forward(slices, targets)
 
         prefixed_loss_dict = {f"{prefix}_{name}": value for name, value in losses_dict.items()}
         prefixed_loss_dict[f"{prefix}_loss"] = sum(loss for loss in losses_dict.values())
 
+        # preds = [
+        #     {
+        #         "boxes": p["boxes"],
+        #         "scores": p["scores"],
+        #         "labels": p["labels"]
+        #     }
+        #     for p in proposals
+        # ]
+        # targets = [
+        #     {
+        #         "boxes": t["boxes"],
+        #         "labels": t["labels"]
+        #     }
+        #     for t in targets
+        # ]
         log_dict = {
             **prefixed_loss_dict,
+            # **compute_metrics(preds, targets, metrics=self.metrics, prefix=prefix, task="region_proposal")
         }
-
-        # if type(output) == tuple:
-        #     preds = [
-        #         {
-        #             "boxes": p["boxes"],
-        #             "scores": p["scores"],
-        #             "labels": p["labels"]
-        #         }
-        #         for p in proposals
-        #     ]
-        #     targets = [
-        #         {
-        #             "boxes": t["boxes"],
-        #             "labels": t["labels"]
-        #         }
-        #         for t in targets
-        #     ]
-        #     log_dict.update(**compute_metrics(preds, targets, metrics=self.metrics, prefix=prefix, task="region_proposal"))
 
         self.log_dict(dictionary=log_dict, batch_size=slices.shape[0], on_step=False, prog_bar=True, on_epoch=True)
 
@@ -194,6 +243,9 @@ class RPN(l.LightningModule):
         optimizer = optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, eps=self.eps,
                                 weight_decay=self.weight_decay)
 
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
+
         return {
             "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"}
         }
