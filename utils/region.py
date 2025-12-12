@@ -1,6 +1,7 @@
 import torch
 from monai.inferers import SlidingWindowInferer
 from torch import Tensor
+from torchvision.ops import boxes as box_ops
 from torchmetrics.functional.classification import jaccard_index
 
 
@@ -22,8 +23,8 @@ def sliding_window_inference_3d(region, model, roi_d, roi_h, roi_w, overlap=0.5)
 
     return inferer(region.unsqueeze(0), network=model).squeeze(0)
 
+
 def expand_boxes(boxes: Tensor, bounds: tuple[int, int], roi_size: tuple[int, int]):
-    H, W = bounds
     min_width, min_height = roi_size
 
     boxes = boxes.clone()  # avoid modifying caller's tensor
@@ -47,33 +48,7 @@ def expand_boxes(boxes: Tensor, bounds: tuple[int, int], roi_size: tuple[int, in
         expanded = True
 
     if expanded:
-        # keep expanded size into bounds
-        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-
-        # widths/heights after resize
-        new_widths = x2 - x1
-        new_heights = y2 - y1
-
-        shift = -torch.minimum(x1, torch.zeros_like(x1))
-        x1 = x1 + shift
-        x2 = x1 + new_widths
-
-        shift = torch.maximum(x2 - W, torch.zeros_like(x2))
-        x1 = x1 - shift
-        x2 = x1 + new_widths
-
-        shift = -torch.minimum(y1, torch.zeros_like(y1))
-        y1 = y1 + shift
-        y2 = y1 + new_heights
-
-        shift = torch.maximum(y2 - H, torch.zeros_like(y2))
-        y1 = y1 - shift
-        y2 = y1 + new_heights
-
-        boxes[:, 0] = x1
-        boxes[:, 1] = y1
-        boxes[:, 2] = x2
-        boxes[:, 3] = y2
+        boxes = box_ops.clip_boxes_to_image(boxes, bounds)
 
     return boxes
 

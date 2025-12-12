@@ -63,13 +63,18 @@ def round_half_up(num: float):
     return math.floor(num + 0.5)
 
 
-def load_volume(volume_path: str):
+def load_volume(volume_path: str, to_tensor: bool = False, reshape_pattern: Optional[str] = "h w d -> d h w"):
     if volume_path.endswith(".nii.gz"):
         volume = nib.load(volume_path).get_fdata()
     elif volume_path.endswith(".npy"):
         volume = np.load(volume_path)
     else:
         raise ValueError(f"Extension not supported: {volume_path}")
+
+    if to_tensor:
+        volume = torch.from_numpy(volume)
+        if reshape_pattern is not None:
+            volume = einops.rearrange(volume, reshape_pattern)
 
     return volume
 

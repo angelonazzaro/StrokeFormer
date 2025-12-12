@@ -26,7 +26,7 @@ def compute_metrics(preds: Union[List, Tensor],
         preds = preds.to(dtype=torch.long)
         targets = targets.to(dtype=torch.long)
 
-        preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
+        # preds, targets = filter_sick_slices_per_volume(preds, targets, "index")
 
     if len(preds) > 0 or preds.shape[0] > 0:
         for metric_name, metric in metrics.items():
@@ -165,6 +165,7 @@ def get_per_slice_segmentation_preds(model,
                                      scans: Tensor,
                                      masks: Tensor,
                                      metrics: dict,
+                                     regions: Optional[list] = None,
                                      means: Optional[Tensor] = None,
                                      stds: Optional[Tensor] = None,
                                      mins_maxs: Optional[Tensor] = None,):
@@ -189,7 +190,10 @@ def get_per_slice_segmentation_preds(model,
     """
 
     with torch.no_grad():
-        preds = model(scans, return_preds=True)
+        preds = model(scans, regions=regions, return_preds=True)
+
+    preds = preds.unsqueeze(1)
+    masks = masks.unsqueeze(1)
 
     for i in range(scans.shape[0]):
         if means is not None and stds is not None:
