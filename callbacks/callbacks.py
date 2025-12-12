@@ -30,6 +30,7 @@ class LogPrediction(Callback):
         self.means = None
         self.stds = None
         self.mins_maxs = None
+        self.regions = []
         self.current_idx = 0
         self.columns = []
 
@@ -63,6 +64,7 @@ class LogPrediction(Callback):
                     self.stds = torch.empty(self.num_samples, dtype=batch["stds"].dtype, device=batch["stds"].device)
                     self.mins_maxs = torch.empty((self.num_samples, 2), dtype=batch["mins_maxs"].dtype,
                                                  device=batch["mins_maxs"].device)
+                    self.regions = []
 
             self.samples[self.current_idx:self.current_idx + take] = batch[samples_key][:take]
             if self.task == "segmentation":
@@ -74,6 +76,8 @@ class LogPrediction(Callback):
                 self.means[self.current_idx:self.current_idx + take] = batch["means"][:take]
                 self.stds[self.current_idx:self.current_idx + take] = batch["stds"][:take]
                 self.mins_maxs[self.current_idx:self.current_idx + take] = batch["mins_maxs"][:take]
+                if "regions" in batch:
+                    self.regions.extend(batch["regions"][:take])
 
             self.current_idx += take
 
@@ -85,9 +89,12 @@ class LogPrediction(Callback):
 
             self.columns.extend(metrics)
 
+        if len(self.regions) == 0:
+            self.regions = None
+
         table = wandb.Table(columns=self.columns)
 
-        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.means, self.stds, self.mins_maxs):  # noqa
+        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.regions, self.means, self.stds, self.mins_maxs):  # noqa
             if result["lesion_size"] != "No Lesion":
                 table.add_data(result["slice_idx"], wandb.Image(result["ground_truth"]), wandb.Image(result["prediction"]), *result["scores"].values())
 

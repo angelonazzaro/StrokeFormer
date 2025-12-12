@@ -8,11 +8,21 @@ DATASET_ANCHORS = {
         "aspect_ratios": ((1.0),),
     },
     "ISLES-DWI": {
-        "sizes": ((7, 10, 20), ),
-        "aspect_ratios": ((1.0), ),
+        "sizes": ((7, 10, 20),),
+        "aspect_ratios": ((1.0),),
     },
     "ISLES-FLAIR": {
         "sizes": ((5, 12, 23, 84),),
         "aspect_ratios": ((1.0)),
+    },
+}
+DATASET_PATTERNS = {
+    "ATLAS": {
+        "subject": r's\d+',
+        "session": r'sub-r(\d+)s(\d+)',
+    },
+    "ISLES": {
+        "subject": r'strokecase(\d+)',
+        "session": r'ses-(\d+)'
     },
 }

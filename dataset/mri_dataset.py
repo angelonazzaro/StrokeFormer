@@ -1,7 +1,8 @@
 import os
 import re
+import json
 from glob import glob
-from typing import Optional, List, Callable, Union
+from typing import Optional, List, Callable, Union, Literal
 
 import einops
 import numpy as np
@@ -13,6 +14,7 @@ from torchvision import tv_tensors
 from torchvision.ops import masks_to_boxes, box_area
 from torchvision.transforms import v2
 
+from constants import DATASET_PATTERNS
 from utils import extract_patches, round_half_up, compute_head_mask, resize, expand_boxes
 
 
@@ -69,6 +71,7 @@ class RegionProposalDataset(Dataset):
             transforms: Optional[List[Callable]] = None,
             resize_to: Optional[tuple[int, int]] = None,
             bb_min_size: tuple[int, int] = (5, 5),
+            dataset_type: Literal["ISLES", "ATLAS"] = "ATLAS",
             augment: bool = False,
     ):
         super().__init__()
@@ -77,8 +80,8 @@ class RegionProposalDataset(Dataset):
 
         # sort slices by their subject id, session id and slice number
         def extract_sort_keys(filepath):
-            subject = int(re.search(r'r(\d+)', filepath).group(1))
-            session = int(re.search(r's(\d+)', filepath).group(1))
+            subject = int(re.search(DATASET_PATTERNS[dataset_type]["subject"], filepath).group(1))
+            session = int(re.search(DATASET_PATTERNS[dataset_type]["session"], filepath).group(1))
             slice_num = int(re.search(r'_slice_(\d+)', filepath).group(1))
             return subject, session, slice_num
 
@@ -124,7 +127,7 @@ class RegionProposalDataset(Dataset):
             boxes = expand_boxes(boxes, self.resize_to, self.bb_min_size)
             labels = torch.ones((mask.shape[0],), dtype=torch.int64)
 
-        scan_slice = (scan_slice - scan_slice.mean()) / scan_slice.std()
+        scan_slice = (scan_slice - scan_slice.mean()) / (scan_slice.std() + 1e8)
         scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
 
         scan_slice = tv_tensors.Image(scan_slice)
@@ -154,7 +157,8 @@ class SegmentationDataset(IterableDataset):
                  subvolume_depth: Optional[int] = None,
                  overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
-                 augment: bool = False):
+                 augment: bool = False,
+                 regions: Optional[str] = None):
         super().__init__()
 
         """
@@ -172,7 +176,7 @@ class SegmentationDataset(IterableDataset):
 
                 ext (str, default=".npy"):
                     File extension for scans and masks (only used if `scans` or `masks` are directories).
-                
+
                 subvolume_depth (int, default=None):
                     Size to consider along Z dimension when extracting subvolumes.
                     If None, the full Z dimension is used.
@@ -182,20 +186,32 @@ class SegmentationDataset(IterableDataset):
                     If None, no overlap is applied.
                     If float, the overlap wll be applied for all spatial dimensions. 
                     Currently, only the Z dimension is considered.
-                 
+
                 transforms (Optional[List[Callable]], default=None):
                     A list of transformations applied to each scan (and mask).
                     Each transform should take a scan (and optionally a mask) as input
                     and return the transformed version.
-                    
+
                 augment: (bool, default=False):
                     Whether to perform data augmentation.
+
+                regions: (Optional[str], default=None):
+                    Path to a .json file containing pre-computed regions. 
+                    Expected structure is:
+                        - scan basename:
+                            - list of dicts:
+                                - region_start
+                                - region_end
+                                - xmin
+                                - ymin
+                                - xmax
+                                - ymax
         """
 
         # currently, only the Z dimension is supported for subvolume extraction.
         if isinstance(overlap, float):
             overlap = (overlap, 1.0, 1.0)  # TODO: substitute with (overlap, overlap, overlap)
-        
+
         if isinstance(overlap, tuple):
             overlap = tuple([ov if ov is not None else 1.0 for ov in overlap])
 
@@ -209,11 +225,14 @@ class SegmentationDataset(IterableDataset):
 
         self.subvolume_depth = subvolume_depth
         self.subvolumes_num = 1  # number of subvolumes that will be generated from each volume
+        scan, _ = load_data(self.scans, None, 0)
 
         if self.subvolume_depth is not None:
-            scan, _ = load_data(self.scans, None, 0)
             patch_D = round_half_up(self.subvolume_depth * overlap[-3] if overlap is not None else scan.shape[-3])
             self.subvolumes_num = round_half_up(scan.shape[-3] / patch_D)
+            self.patch_D = patch_D
+        else:
+            self.patch_D = scan.shape[-3]
 
         if transforms is not None:
             transforms = v2.Compose(transforms)
@@ -226,6 +245,12 @@ class SegmentationDataset(IterableDataset):
 
         self.transforms = transforms
         self.augment = augment
+
+        if regions is not None:
+            with open(regions, "r") as f:
+                self.regions = json.load(f)
+        else:
+            self.regions = None
 
     def __len__(self):
         return len(self.scans) * self.subvolumes_num
@@ -248,14 +273,14 @@ class SegmentationDataset(IterableDataset):
             # however, this was found on raw intensity values and not on normalized intensity values
             # since we apply per-volume z-score normalization, we need the original mean and std to
             # scale the threshold accordingly when computing the head mask
-            for scan_chunk, mask_chunk in zip(scan_chunks, mask_chunks):
+            for chunk_index, (scan_chunk, mask_chunk) in enumerate(zip(scan_chunks, mask_chunks)):
                 head_mask = compute_head_mask(scan_chunk)
                 scan_chunk_mean, scan_chunk_std = scan_chunk.mean(), scan_chunk.std()
                 scan_chunk = (scan_chunk - scan_chunk_mean) / scan_chunk_std
                 z_min, z_max = scan_chunk.min(), scan_chunk.max()
                 scan_chunk = (scan_chunk - z_min) / (z_max - z_min)
 
-                yield {
+                el = {
                     "scan": scan_chunk,
                     "head_mask": head_mask,
                     "mask": mask_chunk,
@@ -263,3 +288,15 @@ class SegmentationDataset(IterableDataset):
                     "std": scan_chunk_std,
                     "min_max": (z_min, z_max)
                 }
+
+                if self.regions is not None:
+                    scan_basename = os.path.basename(self.scans[index])
+                    regions = self.regions[scan_basename]
+
+                    # temporary workaround for when tensors do not match when batching
+                    if len(regions) == 0:
+                        raise ValueError(f"No regions found for {self.scans[index]}")
+
+                    el["regions"] = regions
+
+                yield el
