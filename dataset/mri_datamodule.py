@@ -1,5 +1,5 @@
 import os
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Literal
 
 import torch
 import torch.nn.functional as F
@@ -59,7 +59,8 @@ class RegionProposalDataModule(LightningDataModule):
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
                  batch_size: int = 32,
-                 num_workers: int = 0):
+                 num_workers: int = 0,
+                 dataset_type: Literal["ATLAS", "ISLES"] = "ATLAS"):
         super().__init__()
 
         validate_paths_structure(paths)
@@ -74,6 +75,7 @@ class RegionProposalDataModule(LightningDataModule):
         self.num_workers = num_workers
 
         self.augment = augment
+        self.dataset_type = dataset_type
 
         self.train_set, self.val_set, self.test_set = (None, None, None)
 
@@ -92,6 +94,7 @@ class RegionProposalDataModule(LightningDataModule):
                                                                 resize_to=self.resize_to,
                                                                 bb_min_size=self.bb_min_size,
                                                                 augment=self.augment if split == "train" else False,
+                                                                dataset_type=self.dataset_type,
                                                                 transforms=transforms))
 
     def train_dataloader(self):

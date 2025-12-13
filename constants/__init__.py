@@ -18,8 +18,8 @@ DATASET_ANCHORS = {
 }
 DATASET_PATTERNS = {
     "ATLAS": {
-        "subject": r's\d+',
-        "session": r'sub-r(\d+)s(\d+)',
+        "subject": r'r(\d+)',
+        "session": r'r\d+s(\d+)',
     },
     "ISLES": {
         "subject": r'strokecase(\d+)',

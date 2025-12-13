@@ -791,6 +791,19 @@ class SegmentationLoss(nn.Module):
                  cls_loss_weight: float = 0.5):
         super().__init__()
 
+        if seg_loss == "ICILoss":
+            # overwrite seg_loss_config
+            seg_loss = "ICILoss"
+            dice_loss = monai.losses.DiceLoss(to_onehot_y=False, softmax=False, sigmoid=False)
+            seg_loss_cfg = {
+                "loss_function_pixel": dice_loss,
+                "loss_function_instance": dice_loss,
+                "loss_function_center": dice_loss,
+                "num_out_chn": 1,
+                "object_chn": 1,
+                "activation": "sigmoid",
+            }
+
         self.seg_loss = instantiate_loss(seg_loss, seg_loss_cfg)
 
         if cls_loss is None:
