@@ -74,6 +74,8 @@ def test(args):
 
         if len(global_scores) == 0:
             for metric_name in scores.keys():
+                if metric_name == "classes":
+                    continue
                 global_scores[metric_name] = {
                     "ca": scores[metric_name],
                     "n": 1,
@@ -81,6 +83,8 @@ def test(args):
         else:
             # CA update rule: (x_n+1 + n * CA_n) / (n + 1)
             for metric_name in global_scores.keys():
+                if metric_name == "classes":
+                    continue
                 curr_ca = global_scores[metric_name]["ca"]
                 curr_n = global_scores[metric_name]["n"]
                 global_scores[metric_name] = {

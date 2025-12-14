@@ -168,7 +168,8 @@ def get_per_slice_segmentation_preds(model,
                                      regions: Optional[list] = None,
                                      means: Optional[Tensor] = None,
                                      stds: Optional[Tensor] = None,
-                                     mins_maxs: Optional[Tensor] = None,):
+                                     mins_maxs: Optional[Tensor] = None,
+                                     head_masks: Optional[Tensor] = None):
     """
         It is an iterator function that computes predictions and scores per single slice.
         Returns a dictionary containing:
@@ -190,7 +191,7 @@ def get_per_slice_segmentation_preds(model,
     """
 
     with torch.no_grad():
-        preds = model(scans, regions=regions, return_preds=True)
+        preds = model(scans, regions=regions, head_masks=head_masks, return_preds=True)
 
     preds = preds.unsqueeze(1)
     masks = masks.unsqueeze(1)

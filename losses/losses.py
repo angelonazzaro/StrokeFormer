@@ -808,13 +808,15 @@ class SegmentationLoss(nn.Module):
 
         if cls_loss is None:
             self.cls_loss = None
+            cls_loss_weight = 0.0
+            seg_loss_weight = 1.0
         else:
             self.cls_loss = instantiate_loss(cls_loss, cls_loss_cfg)
 
         if seg_loss_weight < 0:
             raise ValueError("seg_loss_weight should be non-negative")
 
-        if cls_loss_weight < 0:
+        if cls_loss is not None and cls_loss_weight < 0:
             raise ValueError("cls_loss_weight should be non-negative")
 
         if seg_loss_weight + cls_loss_weight != 1:

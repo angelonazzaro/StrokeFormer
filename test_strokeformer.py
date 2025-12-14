@@ -73,26 +73,27 @@ def test(args):
         batch_size=args.batch_size,
         overlap=None,
         num_workers=args.num_workers,
+        regions=args.regions
     )
 
     datamodule.setup(stage="test")
     dataloader = datamodule.test_dataloader()
     logger.info(f"Loaded test dataloader: {len(dataloader.dataset)} volumes")
 
-    roi_size = (args.subvolume_depth, *args.resize_to) if args.resize_to else (args.subvolume_depth, *args.scan_dim[2:])
-    inferer = SlidingWindowInferer(
-        roi_size=roi_size,
-        sw_batch_size=args.batch_size,
-        overlap=(args.overlap, 0, 0),
-        progress=True,
-        mode="gaussian"
-    )
+    if model.rpn_model is None and args.regions is None:
+        roi_size = (args.subvolume_depth, *args.resize_to) if args.resize_to else (args.subvolume_depth, *args.scan_dim[2:])
+        inferer = SlidingWindowInferer(
+            roi_size=roi_size,
+            sw_batch_size=args.batch_size,
+            overlap=(args.overlap, 0, 0),
+            progress=True,
+            mode="gaussian"
+        )
 
-    inferer = partial(inferer, network=model)
+        model = partial(inferer, network=model)
+        logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
 
     metrics = build_metrics(num_classes=args.num_classes, inference=True)
-
-    logger.info(f"SlidingWindowInferer configured with ROI {roi_size} and overlap {(args.overlap, 0, 0)}")
     logger.info("=== Starting inference over test set ===")
 
     # scores as saved as cumulative average (CA)
@@ -118,7 +119,7 @@ def test(args):
     logger.info(f"Predictions will be saved to {model_prediction_dir}")
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc="Segmenting lesions")):
-        scans, masks, means, stds, mins_maxs = batch["scans"], batch["masks"], batch["means"], batch["stds"], batch["mins_maxs"]
+        scans, masks, regions, means, stds, mins_maxs, head_masks = batch["scans"], batch["masks"], batch["regions"], batch["means"], batch["stds"], batch["mins_maxs"], batch["head_masks"]
         scans, masks = scans.to(device=model.device), masks.to(device=model.device)
         means, stds = means.to(device=model.device), stds.to(device=model.device)
         mins_maxs = mins_maxs.to(device=model.device)
@@ -131,7 +132,7 @@ def test(args):
             grayscale_cam = cam_model(scans, targets, eigen_smooth=False)  # noqa
             grayscale_cam = grayscale_cam  # (B, D, H, W)
 
-        for result in get_per_slice_segmentation_preds(inferer, scans, masks, metrics, means, stds, mins_maxs):
+        for result in get_per_slice_segmentation_preds(model, scans, masks, metrics, regions, means, stds, mins_maxs, head_masks):
             ground_truth = torch.from_numpy(result["ground_truth"]).to(device=model.device)  # (H, W, C)
             prediction = torch.from_numpy(result["prediction"]).to(device=model.device)
 
@@ -235,6 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--scan_dim", nargs=4, type=int, default=(1, 189, 192, 192))
+    parser.add_argument("--regions", default=None)
     parser.add_argument("--resize_to", nargs=2, type=int, default=None)
 
     parser.add_argument("--ckpt_path", type=str, required=True)
