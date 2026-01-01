@@ -82,7 +82,7 @@ trainer:
       save_on_train_epoch_end: true
       enable_version_counter: true
   fast_dev_run: false
-  max_epochs: 150
+  max_epochs: 1
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -115,14 +115,15 @@ trainer:
   default_root_dir: StrokeFormer
   model_registry: null
 model:
-  seg_loss: BinaryDiceLoss
+  seg_loss: DiceCELoss
   seg_loss_cfg:
-    num_classes: 2
-  cls_loss: BCEWithLogitsLoss
+    softmax: true
+    squared_pred: true
+    include_background: false
+  cls_loss: null
   cls_loss_cfg: null
-  loss_weights:
-  - 0.75
-  - 0.25
+  seg_loss_weight: 1.0
+  cls_loss_weight: null
   num_classes: 2
   in_channels: 1
   betas:
@@ -135,7 +136,7 @@ model:
   warmup_steps: 8
   lr_scheduler_interval: epoch
   weight_decay: 0.0006480380780002768
-  rpn_model: mask-r-cnn-epoch=27-val_loss=0.03.ckpt
+  rpn_model: null
   roi_size:
     - 64
     - 64
@@ -143,20 +144,21 @@ model:
 data:
   paths:
     train:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/Base/Masks
+      scans: data/ATLAS_2/Processed/Base/Scans
     val:
-      masks: data/ATLAS_2/Processed/Masks
-      scans: data/ATLAS_2/Processed/Scans
+      masks: data/ATLAS_2/Processed/Base/Masks
+      scans: data/ATLAS_2/Processed/Base/Scans
   ext: .npy
   subvolume_depth: 128
-  overlap: 0.5
+  overlap: 0.25
   resize_to:
   - 128
   - 128
   transforms: null
   batch_size: 8
   num_workers: 0
+  regions: null
 optimizer: null
 lr_scheduler: null
 ckpt_path: null

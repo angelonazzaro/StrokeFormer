@@ -454,7 +454,8 @@ class DWConv(nn.Module):
         super().__init__()
         self.dwconv = nn.Conv3d(dim, dim, 3, 1, 1, bias=True, groups=dim)
         # added batchnorm (remove it ?)
-        self.bn = nn.BatchNorm3d(dim)
+        # self.bn = nn.BatchNorm3d(dim)
+        self.bn = nn.GroupNorm(dim, dim) # equivalent to InstanceNorm
 
     def forward(self, x):
         B, N, C = x.shape
@@ -539,7 +540,8 @@ class SegFormerDecoderHead(nn.Module):
                 stride=1,
                 bias=False,
             ),
-            nn.BatchNorm3d(decoder_head_embedding_dim),
+            # nn.BatchNorm3d(decoder_head_embedding_dim),
+            nn.GroupNorm(decoder_head_embedding_dim, decoder_head_embedding_dim), # equivalent to InstanceNorm
             nn.ReLU(),
         )
         self.dropout = nn.Dropout(dropout)

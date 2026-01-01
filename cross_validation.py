@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import subprocess
+import time
 from argparse import ArgumentParser
 from glob import glob
 
@@ -14,7 +15,8 @@ from lightning import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from tqdm import tqdm
-from utils import resize
+
+from utils import resize, compute_head_mask, robust_normalization
 
 import wandb
 from callbacks import LogPrediction
@@ -79,19 +81,63 @@ def decompose_3d_volumes(volumes_paths, base_dir, k, K, split):
     os.makedirs(OUTPUT_SCAN2D_DIR, exist_ok=True)
     os.makedirs(OUTPUT_MASK2D_DIR, exist_ok=True)
 
-    for i in tqdm(range(len(volumes_paths)),
+    min_brain_area = 0.3
+    total_area = None
+
+    sick, healthy = 0, 0
+
+    for i in tqdm(range(len(volumes_paths["scans"])),
                   desc=f"Decomposing scans for region proposal task {k + 1}/{K}"):
         scan = np.load(volumes_paths["scans"][i])  # shape: (C, H, W, D)
-        mask = np.load(volumes_paths["scans"][i])  # shape: (C, H, W, D)
+        mask = np.load(volumes_paths["masks"][i])  # shape: (C, H, W, D)
+
+        if total_area is None:
+            total_area = scan.shape[-3] * scan.shape[-2]
 
         scan_filepath_basename = os.path.basename(volumes_paths["scans"][i])
         masks_filepath_basename = os.path.basename(volumes_paths["masks"][i])
 
-        for j in range(scan.shape[-1]):
-            output_scan2d_filepath = scan_filepath_basename.replace(".npy", f"_slice_{j}.npy")
-            output_mask2d_filepath = masks_filepath_basename.replace(".npy", f"_slice_{j}.npy")
-            np.save(os.path.join(OUTPUT_SCAN2D_DIR, output_scan2d_filepath), scan[..., j]) # noqa
-            np.save(os.path.join(OUTPUT_MASK2D_DIR, output_mask2d_filepath), mask[..., j]) # noqa
+        healthy_slices = ~mask.any(axis=(0, 1, 2))
+        sick_slices = ~healthy_slices
+        sick_slices = np.argwhere(sick_slices).squeeze(-1)
+
+        # head mask, shape: (C, H, W, kept_D)
+        scan_head_mask = compute_head_mask(scan)  # should match same shape as scan
+        # area per slice along D: sum over (C, H, W) -> (kept_D,)
+        scan_head_mask_sum = np.sum(scan_head_mask, axis=(0, 1, 2))
+
+        area_coverage = scan_head_mask_sum / total_area
+        healthy_slices = healthy_slices & (area_coverage >= min_brain_area)
+        healthy_slices = np.argwhere(healthy_slices).squeeze(-1)
+        healthy_slices = random.sample(list(healthy_slices), k=min(len(healthy_slices), len(sick_slices)))
+        healthy_slices = np.asarray(healthy_slices)
+
+        # scan, _, _ = robust_normalization(scan, scan_head_mask)
+        scan = (scan - scan.mean()) / (scan.std() + 1e-8)
+
+        healthy += len(healthy_slices)
+        sick += len(sick_slices)
+
+        sick_scan = scan[..., sick_slices]
+        sick_mask = mask[..., sick_slices]
+
+        healthy_scan = scan[..., healthy_slices]
+        healthy_mask = mask[..., healthy_slices]
+
+        for j in range(sick_scan.shape[-1]):
+            output_scan2d_filepath = scan_filepath_basename.replace(".npy", f"_slice_{j}_sick.npy")
+            output_mask2d_filepath = masks_filepath_basename.replace(".npy", f"_slice_{j}_sick.npy")
+            np.save(os.path.join(OUTPUT_SCAN2D_DIR, output_scan2d_filepath), sick_scan[..., j]) # noqa
+            np.save(os.path.join(OUTPUT_MASK2D_DIR, output_mask2d_filepath), sick_mask[..., j]) # noqa
+
+        for j in range(healthy_scan.shape[-1]):
+            output_scan2d_filepath = scan_filepath_basename.replace(".npy", f"_slice_{j}_healthy.npy")
+            output_mask2d_filepath = masks_filepath_basename.replace(".npy", f"_slice_{j}_healthy.npy")
+            np.save(os.path.join(OUTPUT_SCAN2D_DIR, output_scan2d_filepath), healthy_scan[..., j]) # noqa
+            np.save(os.path.join(OUTPUT_MASK2D_DIR, output_mask2d_filepath), healthy_mask[..., j]) # noqa
+
+
+    logger.info(f"Sick slices: {sick}, healthy slices: {healthy}")
 
     return OUTPUT_SCAN2D_DIR, OUTPUT_MASK2D_DIR
 
@@ -206,14 +252,16 @@ def main(args):
         val_paths = _make_paths(val_masks_paths)
         test_paths = _make_paths(test_masks_paths)
 
-        base_dir = os.path.dirname(train_paths["scans"][0])
+        base_dir = os.path.dirname(os.path.dirname(train_paths["scans"][0]))
+        unique_id = time.time()
+        base_dir = os.path.join(base_dir, str(unique_id))
         train_scans_2d_dir, train_masks_2d_dir = decompose_3d_volumes(train_paths, base_dir, k, args.k, "train")
         val_scans_2d_dir, val_masks_2d_dir = decompose_3d_volumes(val_paths, base_dir, k, args.k, "val")
         test_scans_2d_dir, test_masks_2d_dir = decompose_3d_volumes(test_paths, base_dir, k, args.k, "test")
 
         dataset_type = args.dataset_anchors.split("-")[0]
 
-        rpn = RPN(lr=args.rpn_lr, weight_decay=args.rpn_weight_decay, betas=args.rpn_betas, eps=args.rpn_eps,
+        rpn = RPN(weight_decay=args.rpn_weight_decay, betas=args.rpn_betas, eps=args.rpn_eps,
                   backbone_weights=args.rpn_backbone_weights, dataset_anchors=args.dataset_anchors)
         rp_datamodule = RegionProposalDataModule(
             paths={
@@ -264,7 +312,7 @@ def main(args):
         subprocess.run(cmd, check=True)
 
         # save region proposals to speedup segformer training and testing
-        csv_file = f"regions_{dataset_type}_{args.roi_size[1:]}.csv"
+        csv_file = f"regions_{args.model_prefix}_{args.roi_size[1:]}_{k+1}.csv"
         headers = ["scan_name", "region_start", "region_end", "xmin", "ymin", "xmax", "ymax"]
         stages = ["train", "val", "test"]
 
@@ -288,6 +336,7 @@ def main(args):
                 overlap=args.overlap,
                 subvolume_depth=args.subvolume_depth,
                 transforms=args.transforms,
+                normalize=False,
                 augment=True
             )
 
@@ -297,8 +346,9 @@ def main(args):
 
                 for idx, data in tqdm(enumerate(data_set), total=len(data_set), desc=f"Proposing regions for {stage} stage - {k + 1}/{args.k}"):
                     scan, head_mask = data["scan"].to(rpn_model.device), data["head_mask"].to(rpn_model.device)
-                    scan, head_mask = resize(scan.unsqueeze(0), head_mask.unsqueeze(0), *args.resize_to)
-                    scan, head_mask = scan.squeeze(0), head_mask.squeeze(0)
+                    if args.resize_to is not None:
+                        scan, head_mask = resize(scan.unsqueeze(0), head_mask.unsqueeze(0), *args.resize_to)
+                        scan, head_mask = scan.squeeze(0), head_mask.squeeze(0)
                     for final_box, group_dict in propose_regions(rpn_model, scan, head_mask, args.roi_size):
                         start, end = group_dict["region_start"], group_dict["region_end"]
                         xmin, ymin, xmax, ymax = round_half_up(final_box[:, 0].item()), round_half_up(
@@ -318,7 +368,7 @@ def main(args):
 
         os.remove(csv_file)
 
-        regions_json_file = f"regions_grouped_{dataset_type}_{args.roi_size[1:]}.json"
+        regions_json_file = f"regions_grouped_{args.model_prefix}_{args.roi_size[1:]}_{k+1}.json"
         with open(regions_json_file, "w") as f:
             json.dump(grouped, f, indent=2)
 

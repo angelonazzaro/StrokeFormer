@@ -93,8 +93,11 @@ def test(args):
                 }
 
         if args.n_predictions > batch_idx:
-            ground_truths = [draw_bounding_boxes(to_3channel(img), target["boxes"], colors="green").cpu() for img, target in zip(slices, targets)]
-            predictions = [draw_bounding_boxes(to_3channel(img), proposal["boxes"], colors="red").cpu() for img, proposal in zip(slices, proposals)]
+            if slices.min() != 0 or slices.max() != 1:
+                slices = slices - slices.min()
+                slices = slices / slices.max()
+            ground_truths = [draw_bounding_boxes(to_3channel(img[:1]), target["boxes"], colors="cyan").cpu() for img, target in zip(slices, targets)]
+            predictions = [draw_bounding_boxes(to_3channel(img[:1]), proposal["boxes"], colors="red").cpu() for img, proposal in zip(slices, proposals)]
             ground_truths = torch.stack(ground_truths)
             predictions = torch.stack(predictions)
 
@@ -113,6 +116,7 @@ def test(args):
     file_exists = os.path.exists(scores_path)
 
     global_scores = {m: v["ca"].item() for m, v in global_scores.items()}
+    global_scores = {"model": args.model_name, **global_scores}
 
     with open(scores_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=global_scores.keys())

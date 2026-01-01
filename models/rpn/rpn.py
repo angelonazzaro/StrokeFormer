@@ -7,14 +7,176 @@ import torch
 import torch.optim as optim
 import torchvision
 from torch import Tensor
-from torchvision.models.detection.faster_rcnn import FasterRCNN
+from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
 from torchvision.models.detection.roi_heads import fastrcnn_loss
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection.rpn import concat_box_prediction_layers
 from torchvision.models.detection.transform import GeneralizedRCNNTransform
 
 from constants import DATASET_ANCHORS
-from utils import build_metrics
+from utils import build_metrics, compute_metrics
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from collections import OrderedDict
+
+
+# =========================================================================================
+# Truenet model utility functions
+# Vaanathi Sundaresan
+# 09-03-2021, Oxford
+# =========================================================================================
+
+
+class SingleConv(nn.Module):
+    """(convolution => [BN] => ReLU)"""
+
+    def __init__(self, in_channels, out_channels, kernelsize, name, mid_channels=None):
+        super().__init__()
+        if not mid_channels:
+            mid_channels = out_channels
+        self.single_conv = nn.Sequential(
+            OrderedDict([(
+                name + "conv", nn.Conv2d(in_channels, mid_channels, kernel_size=kernelsize, padding=1)),
+                (name + "bn", nn.BatchNorm2d(mid_channels)),
+                (name + "relu", nn.ReLU(inplace=True)), ])
+        )
+
+    def forward(self, x):
+        return self.single_conv(x)
+
+
+class DoubleConv(nn.Module):
+    """(convolution => [BN] => ReLU) * 2"""
+
+    def __init__(self, in_channels, out_channels, kernelsize, name, mid_channels=None):
+        super().__init__()
+        pad = (kernelsize - 1) // 2
+        if not mid_channels:
+            mid_channels = out_channels
+        self.double_conv = nn.Sequential(
+            OrderedDict([(
+                name + "conv1", nn.Conv2d(in_channels, mid_channels, kernel_size=kernelsize, padding=pad)),
+                (name + "bn1", nn.BatchNorm2d(mid_channels)),
+                (name + "relu1", nn.ReLU(inplace=True)),
+                (name + "conv2", nn.Conv2d(mid_channels, out_channels, kernel_size=kernelsize, padding=pad)),
+                (name + "bn2", nn.BatchNorm2d(out_channels)),
+                (name + "relu2", nn.ReLU(inplace=True)), ])
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+
+class Down(nn.Module):
+    """Downscaling with maxpool then double conv"""
+
+    def __init__(self, in_channels, out_channels, kernel_size, name):
+        super().__init__()
+        pad = (kernel_size - 1) // 2
+        mid_channels = out_channels
+        self.maxpool_conv = nn.Sequential(
+            OrderedDict([
+                (name + "maxpool", nn.MaxPool2d(2)),
+                (name + "conv1", nn.Conv2d(in_channels, mid_channels, kernel_size=kernel_size, padding=pad)),
+                (name + "bn1", nn.BatchNorm2d(mid_channels)),
+                (name + "relu1", nn.ReLU(inplace=True)),
+                (name + "conv2", nn.Conv2d(mid_channels, out_channels, kernel_size=kernel_size, padding=pad)),
+                (name + "bn2", nn.BatchNorm2d(out_channels)),
+                (name + "relu2", nn.ReLU(inplace=True)), ])
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+
+class Up(nn.Module):
+    """Upscaling then double conv"""
+
+    def __init__(self, in_channels, out_channels, kernel_size, name, bilinear=True):
+        super().__init__()
+
+        # if bilinear, use the normal convolutions to reduce the number of channels
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, name)
+        else:
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=kernel_size, stride=2)
+            self.conv = DoubleConv(in_channels, out_channels, 3, name)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        # input is CHW
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2])
+        # if you have padding issues, see
+        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
+        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+
+class OutConv(nn.Module):
+    """convolution"""
+
+    def __init__(self, in_channels, out_channels, name):
+        super(OutConv, self).__init__()
+        self.conv = nn.Sequential(
+            OrderedDict([(
+                name + "conv", nn.Conv2d(in_channels, out_channels, kernel_size=1)), ])
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+# =========================================================================================
+# Triplanar U-Net ensemble network (TrUE-Net) model
+# Vaanathi Sundaresan
+# 09-03-2021, Oxford
+# =========================================================================================
+
+class TrUENet(nn.Module):
+    '''
+    TrUE-Net model definition
+    '''
+
+    def __init__(self, n_channels, n_classes, init_channels, plane='axial', bilinear=False):
+        super(TrUENet, self).__init__()
+        self.n_channels = n_channels
+        self.init_channels = init_channels
+        self.n_classes = n_classes
+        self.n_layers = 3
+        self.bilinear = bilinear
+
+        self.inpconv = OutConv(n_channels, 3, name="inpconv_")
+        if plane == 'axial':
+            self.convfirst = DoubleConv(3, init_channels, 3, name="convfirst_")
+        else:
+            self.convfirst = DoubleConv(3, init_channels, 5, name="convfirst_")
+        self.down1 = Down(init_channels, init_channels * 2, 3, name="down1_")
+        self.down2 = Down(init_channels * 2, init_channels * 4, 3, name="down2_")
+        self.down3 = Down(init_channels * 4, init_channels * 8, 3, name="down3_")
+        self.up3 = Up(init_channels * 8, init_channels * 4, 3, "up1_", bilinear)
+        self.up2 = Up(init_channels * 4, init_channels * 2, 3, "up2_", bilinear)
+        self.up1 = Up(init_channels * 2, init_channels, 3, "up3_", bilinear)
+        self.outconv = OutConv(init_channels, n_classes, name="outconv_")
+
+    def forward(self, x):
+        xi = self.inpconv(x)
+        x1 = self.convfirst(xi)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x = self.up3(x4, x3)
+        x = self.up2(x, x2)
+        x = self.up1(x, x1)
+        logits = self.outconv(x)
+        return logits
 
 
 def detection_forward(model, images, targets):
@@ -113,7 +275,9 @@ def detection_forward(model, images, targets):
 class RPN(l.LightningModule):
 
     def __init__(self,
-                 lr: float = 1e-4,
+                 backbone_lr: float = 1e-4,
+                 roi_head_lr: float = 1e-3,
+                 rpn_lr: float = 1e-3,
                  eps: float = 1e-8,
                  betas: tuple[float, float] = (0.9, 0.999),
                  dataset_anchors: Literal["ATLAS", "ISLES-DWI", "ISLES-FLAIR"] = "ATLAS",
@@ -121,26 +285,57 @@ class RPN(l.LightningModule):
                  weight_decay: float = 1e-4):
         super().__init__()
 
-        self.lr = lr
+        self.backbone_lr = backbone_lr
+        self.roi_head_lr = roi_head_lr
+        self.rpn_lr = rpn_lr
         self.betas = betas
         self.eps = eps
         self.weight_decay = weight_decay
         self.dataset_anchors = dataset_anchors
 
-        backbone = torchvision.models.mobilenet_v3_small(weights=backbone_weights).features
+        # backbone = torchvision.models.mobilenet_v3_small(weights=backbone_weights).features
+        #
+        # if backbone_weights is not None:
+        #     # https://www.mdpi.com/1424-8220/23/21/8763
+        #     # https://link.springer.com/chapter/10.1007/978-3-031-37745-7_2
+        #     averaged_weight = backbone[0][0].weight.mean(dim=1, keepdim=True)
+        #
+        # backbone[0][0] = torch.nn.Conv2d(2, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        #
+        # if backbone_weights is not None:
+        #     averaged_weight = averaged_weight.repeat(1, 2, 1, 1)
+        #     backbone[0][0].weight = torch.nn.Parameter(averaged_weight)
 
-        if backbone_weights is not None:
-            # https://www.mdpi.com/1424-8220/23/21/8763
-            # https://link.springer.com/chapter/10.1007/978-3-031-37745-7_2
-            averaged_weight = backbone[0][0].weight.mean(dim=1, keepdim=True)
-            averaged_weight = torch.nn.Parameter(averaged_weight)
+        axial_truenet_ckpt = torch.load(
+            "/media/neurone-pc13/7FD0B7F50A4D7BEE/Angelo/strokeformer/Truenet_MWSC_T1_axial.pth", map_location="cpu")
+        axial_truenet = TrUENet(n_channels=1, n_classes=2, init_channels=64)
 
-        backbone[0][0] = torch.nn.Conv2d(1, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        new_axial_state_dict = OrderedDict()
+        for key, value in axial_truenet_ckpt.items():
+            name = key
+            name = name.replace("module.", "")
+            new_axial_state_dict[name] = value
 
-        if backbone_weights is not None:
-            backbone[0][0].weight = averaged_weight
+        axial_truenet.load_state_dict(new_axial_state_dict)
+        old_inpcov = axial_truenet.inpconv.conv[0].weight.clone()
+        new_inpconv = old_inpcov.repeat(1, 2, 1, 1)
+        axial_truenet.inpconv = OutConv(2, 3, name="inpconv_")
+        axial_truenet.inpconv.conv[0].weight = torch.nn.Parameter(new_inpconv)
 
-        x = torch.randn(1, 1, 224, 224)
+        # encoder only
+        backbone = nn.Sequential(
+            axial_truenet.inpconv,
+            axial_truenet.convfirst,
+            axial_truenet.down1,
+            axial_truenet.down2,
+            axial_truenet.down3,
+        )
+
+        for pname, param in backbone.named_parameters():
+            if "inpconv" in pname or "down1" in pname:
+                param.requires_grad = False
+
+        x = torch.randn(1, 2, 192, 192)
         out = backbone(x)
 
         if isinstance(out, dict):
@@ -166,27 +361,33 @@ class RPN(l.LightningModule):
 
         # replace the pre-trained head with a new one
         self.model = FasterRCNN(backbone, num_classes, rpn_anchor_generator=anchor_generator, roi_pooler=roi_pooler)
+        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
 
+        self.model.roi_heads.box_predictor = FastRCNNPredictor(
+            in_features,
+            num_classes=2  # background + stroke
+        )
         self.model.transform = GeneralizedRCNNTransform(
-            min_size=(800,),
-            max_size=1333,
-            image_mean=[0.0],  # 1-channel mean
-            image_std=[1.0],  # 1-channel std
+            min_size=192,
+            max_size=192,
+            image_mean=[0.0], # disable internal normalization
+            image_std=[1.0],
+            size_divisible=32  # important for FPN / RPN stability
         )
 
-        if backbone_weights is None:
-            # https://stackoverflow.com/questions/49433936/how-do-i-initialize-weights-in-pytorch
-            def init_weights(m):
-                if isinstance(m, torch.nn.Module) and hasattr(m, "weight") and (
-                        hasattr(m, "in_channels") or hasattr(m, "in_features")):
-                    if isinstance(m, torch.nn.Conv2d):
-                        y = m.in_channels
-                    else:
-                        y = m.in_features
-
-                    m.weight.data.normal_(0.0, 1.0 / np.sqrt(y))
-
-            self.model.apply(init_weights)
+        # if backbone_weights is None:
+        #     # https://stackoverflow.com/questions/49433936/how-do-i-initialize-weights-in-pytorch
+        #     def init_weights(m):
+        #         if isinstance(m, torch.nn.Module) and hasattr(m, "weight") and (
+        #                 hasattr(m, "in_channels") or hasattr(m, "in_features")):
+        #             if isinstance(m, torch.nn.Conv2d):
+        #                 y = m.in_channels
+        #             else:
+        #                 y = m.in_features
+        #
+        #             m.weight.data.normal_(0.0, 1.0 / np.sqrt(y))
+        #
+        #     self.model.apply(init_weights)
 
         self.metrics = build_metrics(2, task="region_proposal")
 
@@ -224,9 +425,15 @@ class RPN(l.LightningModule):
         #     }
         #     for t in targets
         # ]
+
+        # metrics = compute_metrics(preds, targets, metrics=self.metrics, prefix=prefix, task="region_proposal")
+
+        # if "classes" in metrics:
+        #     del metrics["classes"]
+
         log_dict = {
             **prefixed_loss_dict,
-            # **compute_metrics(preds, targets, metrics=self.metrics, prefix=prefix, task="region_proposal")
+            # **metrics
         }
 
         self.log_dict(dictionary=log_dict, batch_size=slices.shape[0], on_step=False, prog_bar=True, on_epoch=True)
@@ -240,8 +447,12 @@ class RPN(l.LightningModule):
         return self._common_step(batch, "val")
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, eps=self.eps,
-                                weight_decay=self.weight_decay)
+        optimizer = optim.AdamW([
+            {"params": [p for p in self.model.backbone.parameters() if p.requires_grad], "lr": self.backbone_lr},
+            {"params": self.model.roi_heads.parameters(), "lr": self.roi_head_lr},
+            {"params": self.model.rpn.parameters(), "lr": self.rpn_lr},
+        ],  lr=self.rpn_lr, betas=self.betas, eps=self.eps,
+            weight_decay=self.weight_decay)
 
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
 

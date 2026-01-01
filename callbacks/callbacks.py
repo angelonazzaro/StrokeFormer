@@ -27,10 +27,9 @@ class LogPrediction(Callback):
         self.task = task
         self.samples = None
         self.targets = None
+        self.p1s = None
+        self.p99s = None
         self.head_masks = None
-        self.means = None
-        self.stds = None
-        self.mins_maxs = None
         self.regions = []
         self.current_idx = 0
         self.columns = []
@@ -58,27 +57,25 @@ class LogPrediction(Callback):
                     self.targets = torch.empty(mask_shape, dtype=batch[targets_key].dtype,
                                                device=batch[targets_key].device)
                     self.head_masks = torch.empty(shape, dtype=batch["head_masks"].dtype, device=self.samples.device)
+                    self.p1s = torch.empty(self.num_samples, dtype=self.samples.dtype, device=self.samples.device)
+                    self.p99s = torch.empty(self.num_samples, dtype=self.samples.dtype, device=self.samples.device)
                 else:
                     self.targets = []
 
                 if self.task == "segmentation":
-                    self.means = torch.empty(self.num_samples, dtype=batch["means"].dtype, device=batch["means"].device)
-                    self.stds = torch.empty(self.num_samples, dtype=batch["stds"].dtype, device=batch["stds"].device)
-                    self.mins_maxs = torch.empty((self.num_samples, 2), dtype=batch["mins_maxs"].dtype,
-                                                 device=batch["mins_maxs"].device)
                     self.regions = []
 
             self.samples[self.current_idx:self.current_idx + take] = batch[samples_key][:take]
             if self.task == "segmentation":
                 self.targets[self.current_idx:self.current_idx + take] = batch[targets_key][:take]
+                self.p1s[self.current_idx:self.current_idx + take] = batch["p1s"][:take]
+                self.p99s[self.current_idx:self.current_idx + take] = batch["p99s"][:take]
             else:
                 self.targets.extend(batch[targets_key][:take])
 
             if self.task == "segmentation":
-                self.means[self.current_idx:self.current_idx + take] = batch["means"][:take]
-                self.stds[self.current_idx:self.current_idx + take] = batch["stds"][:take]
-                self.mins_maxs[self.current_idx:self.current_idx + take] = batch["mins_maxs"][:take]
                 self.head_masks[self.current_idx:self.current_idx + take] = batch["head_masks"][:take]
+
                 if "regions" in batch:
                     self.regions.extend(batch["regions"][:take])
 
@@ -97,7 +94,7 @@ class LogPrediction(Callback):
 
         table = wandb.Table(columns=self.columns)
 
-        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.regions, self.means, self.stds, self.mins_maxs, self.head_masks):  # noqa
+        for result in get_per_slice_segmentation_preds(model, self.samples, self.targets, model.metrics, self.p1s, self.p99s, self.regions, self.head_masks):  # noqa
             if result["lesion_size"] != "No Lesion":
                 table.add_data(result["slice_idx"], wandb.Image(result["ground_truth"]), wandb.Image(result["prediction"]), *result["scores"].values())
 
@@ -108,10 +105,15 @@ class LogPrediction(Callback):
         with torch.no_grad():
             proposals = model(self.samples, None)  # list of dicts: boxes, labels, scores
 
-        ground_truths = [draw_bounding_boxes(to_3channel(img), target["boxes"], colors="green").cpu() for img, target in
-                         zip(self.samples, self.targets)]
-        predictions = [draw_bounding_boxes(to_3channel(img), proposal["boxes"], colors="red").cpu() for img, proposal in
-                       zip(self.samples, proposals)]
+        samples = self.samples
+        if samples.min() != 0 or samples.max() != 1:
+            samples = samples - samples.min()
+            samples = samples / samples.max()
+
+        ground_truths = [draw_bounding_boxes(to_3channel(img[:1]), target["boxes"], colors="cyan").cpu() for img, target in
+                         zip(samples, self.targets)]
+        predictions = [draw_bounding_boxes(to_3channel(img[:1]), proposal["boxes"], colors="red").cpu() for img, proposal in
+                       zip(samples, proposals)]
         ground_truths = torch.stack(ground_truths)
         predictions = torch.stack(predictions)
 

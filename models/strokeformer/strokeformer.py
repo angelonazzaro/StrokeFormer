@@ -80,35 +80,33 @@ class StrokeFormer(LightningModule):
             logits_sum = torch.zeros(B, self.num_classes, D, H, W, device=scans.device, dtype=scans.dtype)
             logits_count = torch.zeros(B, 1, D, H, W, device=scans.device)
 
-        if self.rpn_model is not None and regions is None:
+            if self.rpn_model is not None and regions is None:
+                for i in range(B):
+                    for (final_box, group_dict) in propose_regions(self.rpn_model, scans[i], head_masks[i], self.roi_size):
+                        # assign same box to all slices in the group
+                        start, end = group_dict["region_start"], group_dict["region_end"]
+                        xmin, ymin, xmax, ymax = final_box[:, 0], final_box[:, 1], final_box[:, 2], final_box[:, 3]
+                        # group has shape [1, D_g, H, W]
+                        region = group_dict["group"][:, ymin:ymax, xmin:xmax]
+                        curr_logits = sliding_window_inference_3d(region, self.model, *self.roi_size)
+                        logits_sum[i, :, start:end, ymin:ymax, xmin:xmax] += curr_logits
+                        logits_count[i, :, start:end, ymin:ymax, xmin:xmax] += 1
+            elif regions is not None:
+                # regions are assumed to be already divided into groups and to have the bounding box standardized
+                # according to the above procedure
+                for i in range(B):
+                    scan = scans[i]
+                    for region in regions[i]:
+                        start, end = region["region_start"], region["region_end"]
+                        xmin, ymin, xmax, ymax = region["xmin"], region["ymin"], region["xmax"], region["ymax"]
+                        region_input = scan[:, start:end, ymin:ymax, xmin:xmax]
+                        curr_logits = sliding_window_inference_3d(region_input, self.model, *self.roi_size)
+                        logits_sum[i, :, start:end, ymin:ymax, xmin:xmax] += curr_logits
+                        logits_count[i, :, start:end , ymin:ymax, xmin:xmax] += 1
 
-            for i in range(B):
-                for (final_box, group_dict) in propose_regions(self.rpn_model, scans[i], head_masks[i], self.roi_size):
-                    # assign same box to all slices in the group
-                    start, end = group_dict["region_start"], group_dict["region_end"]
-                    xmin, ymin, xmax, ymax = final_box[:, 0], final_box[:, 1], final_box[:, 2], final_box[:, 3]
-                    # group has shape [1, D_g, H, W]
-                    region = group_dict["group"][:, ymin:ymax, xmin:xmax]
-                    curr_logits = sliding_window_inference_3d(region, self.model, *self.roi_size)
-                    logits_sum[i, :, start:end, ymin:ymax, xmin:xmax] += curr_logits
-                    logits_count[i, :, start:end, ymin:ymax, xmin:xmax] += 1
-        elif regions is not None:
-            # regions are assumed to be already divided into groups and to have the bounding box standardized
-            # according to the above procedure
-            for i in range(B):
-                scan = scans[i]
-                for region in regions[i]:
-                    start, end = region["region_start"], region["region_end"]
-                    xmin, ymin, xmax, ymax = region["xmin"], region["ymin"], region["xmax"], region["ymax"]
-                    region_input = scan[:, start:end, ymin:ymax, xmin:xmax]
-                    curr_logits = sliding_window_inference_3d(region_input, self.model, *self.roi_size)
-                    logits_sum[i, :, start:end, ymin:ymax, xmin:xmax] += curr_logits
-                    logits_count[i, :, start:end , ymin:ymax, xmin:xmax] += 1
+            logits = logits_sum / logits_count.clamp(min=1)
         else:
             logits = self.model(scans)  # (B, N, D, H, W)
-
-        if self.rpn_model is not None or regions is not None:
-            logits = logits_sum / logits_count.clamp(min=1)
 
         preds = logits.softmax(dim=1)
         # cast to x.dtype is necessary for MONAI inferer
@@ -132,6 +130,12 @@ class StrokeFormer(LightningModule):
 
         out = self.forward(scans=scans, masks=masks, head_masks=head_masks, regions=regions, return_dict=True)
         logits, preds = out["logits"], out["preds"] # (B, N, D, H, W) and (B, D, H, W)
+
+        if logits.shape[-3] > masks.shape[-3]:
+            # segformer pads the dimensions to output a cube
+            logits = logits[:, :, :masks.shape[-3]]
+            preds = preds[:, masks.shape[-3]]
+
         masks = out.get("masks", masks)
 
         loss_dict = self.loss(logits, masks, prefix=prefix, return_dict=True)

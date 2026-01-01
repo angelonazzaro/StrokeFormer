@@ -841,16 +841,23 @@ class SegmentationLoss(nn.Module):
         if self.cls_loss is not None:
             cls_loss = self.cls_loss(logits_cf, targets_cf)
 
-        if "monai" in str(type(self.seg_loss)):
+        if "monai" in str(type(self.seg_loss)) or self.seg_loss.__class__.__name__ == "ICILoss":
             # monai losses expect tensors to be in shape BNHW[D]
             logits_cl = einops.rearrange(logits, "b n d h w -> b n h w d")
             targets_cl = F.one_hot(targets_cf, logits_cl.shape[1]).to(dtype=torch.long)  # B, D, H, W, N
             targets_cl = einops.rearrange(targets_cl, "b d h w n -> b n h w d")
+
+            if self.seg_loss.__class__.__name__ == "ICILoss":
+                logits_cl = logits_cl[:, 1:]
+                targets_cl = targets_cl[:, 1:]
         else:
             logits_cl = logits_cf
             targets_cl = targets_cf
 
         seg_loss = self.seg_loss(logits_cl, targets_cl.float())
+
+        if self.seg_loss.__class__.__name__ == "ICILoss":
+            seg_loss = seg_loss[0] * 0.25 + seg_loss[1] * 0.5 + seg_loss[2] * 0.25
 
         if self.cls_loss is not None:
             loss = self.seg_loss_weight * seg_loss + self.cls_loss_weight * cls_loss

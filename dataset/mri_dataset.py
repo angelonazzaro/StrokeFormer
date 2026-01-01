@@ -15,7 +15,7 @@ from torchvision.ops import masks_to_boxes, box_area
 from torchvision.transforms import v2
 
 from constants import DATASET_PATTERNS
-from utils import extract_patches, round_half_up, compute_head_mask, resize, expand_boxes
+from utils import extract_patches, round_half_up, compute_head_mask, resize, expand_boxes, robust_normalization
 
 
 def init_scans_masks_filepaths(scans: Union[List[str], str],
@@ -96,16 +96,13 @@ class RegionProposalDataset(Dataset):
         if transforms is not None:
             self.transforms = v2.Compose(transforms)
         else:
-            self.transforms = v2.RandomApply([
-                v2.RandomHorizontalFlip(p=0.5),
-                v2.RandomVerticalFlip(p=0.5),
-                v2.RandomRotation(degrees=(-30, 30))
-            ], p=0.5)
+            self.transforms = None
 
     def __len__(self):
         return len(self.scans)
 
     def __getitem__(self, idx):
+        # slices are assumed to be already normalized with robust normalization
         scan_slice, mask = load_data(self.scans, self.masks, idx, None)
 
         if self.resize_to is not None:
@@ -118,17 +115,22 @@ class RegionProposalDataset(Dataset):
         obj_ids = obj_ids[1:] # remove background
         mask = torch.from_numpy(labeled_mask == obj_ids[:, None, None]).to(dtype=torch.uint8) # (num_objects, H, W)
         boxes = masks_to_boxes(mask)
-        area = box_area(boxes)
 
         # if slice is healthy, create empty bounding boxes
         if mask.sum() == 0:
-            labels = torch.empty((0, ), dtype=torch.int64)
+            labels = torch.zeros((0, ), dtype=torch.int64)
         else:
-            boxes = expand_boxes(boxes, self.resize_to, self.bb_min_size)
+            resize_to = self.resize_to if self.resize_to is not None else scan_slice.shape[1:]
+            boxes = expand_boxes(boxes, resize_to, self.bb_min_size)
             labels = torch.ones((mask.shape[0],), dtype=torch.int64)
 
-        scan_slice = (scan_slice - scan_slice.mean()) / (scan_slice.std() + 1e8)
-        scan_slice = (scan_slice - scan_slice.min()) / (scan_slice.max() - scan_slice.min())
+        area = box_area(boxes)
+
+        mirror = torch.flip(scan_slice, dims=(1, ))  # still (1, H, W)
+        mirror_head_mask = torch.flip(head_mask, dims=(1, ))
+        diff_full = torch.abs((scan_slice * head_mask) - (mirror * mirror_head_mask))
+
+        scan_slice = torch.concatenate([scan_slice, diff_full], dim=0)
 
         scan_slice = tv_tensors.Image(scan_slice)
 
@@ -157,6 +159,7 @@ class SegmentationDataset(IterableDataset):
                  subvolume_depth: Optional[int] = None,
                  overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
+                 normalize: bool = True,
                  augment: bool = False,
                  regions: Optional[str] = None):
         super().__init__()
@@ -236,15 +239,10 @@ class SegmentationDataset(IterableDataset):
 
         if transforms is not None:
             transforms = v2.Compose(transforms)
-        else:
-            transforms = v2.RandomApply([
-                v2.RandomHorizontalFlip(p=0.5),
-                v2.RandomVerticalFlip(p=0.5),
-                v2.RandomRotation(degrees=(-30, 30))
-            ], p=0.5)
 
         self.transforms = transforms
         self.augment = augment
+        self.normalize = normalize
 
         if regions is not None:
             with open(regions, "r") as f:
@@ -261,41 +259,44 @@ class SegmentationDataset(IterableDataset):
 
         for index in indexes:
             scan, mask = load_data(self.scans, self.masks, index, self.transforms if self.augment else None)
+            head_mask = compute_head_mask(scan)
+
+            if self.normalize:
+                scan, p1, p99 = robust_normalization(scan, head_mask)
+                p1, p99 = torch.tensor(p1), torch.tensor(p99)
+            else:
+                p1, p99 = scan.min(), scan.max()
 
             # extract [overlapped] subvolumes along Z dimension
             scan_chunks = extract_patches(scan=scan, overlap=self.overlap,
                                           patch_dim=(self.subvolume_depth, None, None))
             mask_chunks = extract_patches(scan=mask, overlap=self.overlap,
                                           patch_dim=(self.subvolume_depth, None, None))
+            head_mask_chunks = extract_patches(scan=head_mask, overlap=self.overlap,
+                                          patch_dim=(self.subvolume_depth, None, None))
 
-            # per-volume z-score standardization
-            # when computing the head mask for getting the lesion size, the optimal threshold is 8
-            # however, this was found on raw intensity values and not on normalized intensity values
-            # since we apply per-volume z-score normalization, we need the original mean and std to
-            # scale the threshold accordingly when computing the head mask
-            for chunk_index, (scan_chunk, mask_chunk) in enumerate(zip(scan_chunks, mask_chunks)):
-                head_mask = compute_head_mask(scan_chunk)
-                scan_chunk_mean, scan_chunk_std = scan_chunk.mean(), scan_chunk.std()
-                scan_chunk = (scan_chunk - scan_chunk_mean) / scan_chunk_std
-                z_min, z_max = scan_chunk.min(), scan_chunk.max()
-                scan_chunk = (scan_chunk - z_min) / (z_max - z_min)
+            # IMPORTANT: normalization is postponed into the model forward method because:
+            #            1. If we are using the RPN (or regions), then we need to normalize and standardize each slice independently.
+            #            Normalization and standardization must also happen at SUB-VOLUME level, after anatomical mapping
+            #            2. If the RPN is not in use, normalization and standardization can happen at global level
+            # This information is only available into the model
+            for chunk_index, (scan_chunk, mask_chunk, head_mask_chunk) in enumerate(zip(scan_chunks, mask_chunks, head_mask_chunks)):
 
                 el = {
                     "scan": scan_chunk,
-                    "head_mask": head_mask,
                     "mask": mask_chunk,
-                    "mean": scan_chunk_mean,
-                    "std": scan_chunk_std,
-                    "min_max": (z_min, z_max)
+                    "head_mask": head_mask_chunk,
+                    "p1": p1,
+                    "p99": p99
                 }
 
                 if self.regions is not None:
                     scan_basename = os.path.basename(self.scans[index])
-                    regions = self.regions[scan_basename]
+                    regions = self.regions.get(scan_basename, None)
 
                     # temporary workaround for when tensors do not match when batching
-                    if len(regions) == 0:
-                        raise ValueError(f"No regions found for {self.scans[index]}")
+                    if regions is None or len(regions) == 0:
+                        continue
 
                     el["regions"] = regions
 

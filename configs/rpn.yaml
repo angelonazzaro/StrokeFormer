@@ -3,13 +3,14 @@ seed_everything: 42
 trainer:
   accelerator: auto
   strategy: auto
-  devices: auto
+  devices:
+    - 0
   num_nodes: 1
   precision: null
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: faster-cnn-mobilenet-small-v3-tuned-anchors-ISLES-DWI-sick-only-no-pretrain-normal
+      name: truenet-pretrained-rpn-sweep
       save_dir: .
       version: null
       offline: false
@@ -68,7 +69,7 @@ trainer:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: null
-        filename: faster-cnn-mobilenet-small-v3-tuned-anchors-ISLES-DWI-sick-only-no-pretrain-normal-{epoch:02d}-{val_loss:.2f}
+        filename: truenet-pretrained-rpn-sweep-{epoch:02d}-{val_loss:.2f}
         monitor: val_loss
         verbose: true
         save_last: null
@@ -88,8 +89,8 @@ trainer:
   max_steps: -1
   min_steps: null
   max_time: null
-  limit_train_batches: null
-  limit_val_batches: null
+  limit_train_batches: 0.1
+  limit_val_batches: 0.2
   limit_test_batches: null
   limit_predict_batches: null
   overfit_batches: 0.0
@@ -116,7 +117,7 @@ trainer:
   default_root_dir: RPN
   model_registry: null
 model:
-  lr: 0.0001
+  backbone_lr: 0.0001
   eps: 1.0e-08
   betas:
   - 0.9
@@ -125,15 +126,15 @@ model:
 data:
   paths:
     train:
-      scans: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Train/Scans
-      masks: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Train/Masks
+      scans: data/ATLAS_2/Processed/2D/Balanced//Splits/Train/Scans
+      masks: data/ATLAS_2/Processed/2D/Balanced//Splits/Train/Masks
     val:
-      scans: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Val/Scans
-      masks: data/ISLES-2022/Processed/DWI/2D/SickOnly/Splits/Val/Masks
+      scans: data/ATLAS_2/Processed/2D/Balanced/Splits/Val/Scans
+      masks: data/ATLAS_2/Processed/2D/Balanced//Splits/Val/Scans
   ext: .npy
   resize_to:
-    - 224
-    - 224
+    - 192
+    - 192
   transforms: null
   batch_size: 32
   num_workers: 0

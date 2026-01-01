@@ -39,6 +39,8 @@ class SemanticSegmentationTarget:
             self.mask = self.mask.cuda()
 
     def __call__(self, model_output):
+        if model_output.shape[-3] > self.mask.shape[-3]:
+            model_output = model_output[:, :self.mask.shape[-3]]
         return (model_output * self.mask).sum()
 
 
@@ -119,10 +121,10 @@ def test(args):
     logger.info(f"Predictions will be saved to {model_prediction_dir}")
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc="Segmenting lesions")):
-        scans, masks, regions, means, stds, mins_maxs, head_masks = batch["scans"], batch["masks"], batch["regions"], batch["means"], batch["stds"], batch["mins_maxs"], batch["head_masks"]
+        scans, masks, regions, head_masks = batch["scans"], batch["masks"], batch.get("regions", None), batch["head_masks"]
+        p1s, p99s = batch["p1s"], batch["p99s"]
         scans, masks = scans.to(device=model.device), masks.to(device=model.device)
-        means, stds = means.to(device=model.device), stds.to(device=model.device)
-        mins_maxs = mins_maxs.to(device=model.device)
+        p1s, p99s = p1s.to(device=model.device), p99s.to(device=model.device)
 
         preds_until_now = batch_idx * scans.shape[0]
         grayscale_cam = torch.zeros_like(scans[0], device=model.device)
@@ -132,7 +134,7 @@ def test(args):
             grayscale_cam = cam_model(scans, targets, eigen_smooth=False)  # noqa
             grayscale_cam = grayscale_cam  # (B, D, H, W)
 
-        for result in get_per_slice_segmentation_preds(model, scans, masks, metrics, regions, means, stds, mins_maxs, head_masks):
+        for result in get_per_slice_segmentation_preds(model, scans, masks, metrics, p1s, p99s, regions, head_masks):
             ground_truth = torch.from_numpy(result["ground_truth"]).to(device=model.device)  # (H, W, C)
             prediction = torch.from_numpy(result["prediction"]).to(device=model.device)
 
@@ -232,8 +234,8 @@ if __name__ == "__main__":
     parser.add_argument("--scans", type=str, required=True, nargs="+")
     parser.add_argument("--masks", type=str, default=None, nargs="+")
     parser.add_argument("--subvolume_depth", type=int, default=189)
-    parser.add_argument("--overlap", type=float, default=0.5)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--overlap", type=float, default=None)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--scan_dim", nargs=4, type=int, default=(1, 189, 192, 192))
     parser.add_argument("--regions", default=None)

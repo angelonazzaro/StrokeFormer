@@ -165,10 +165,9 @@ def get_per_slice_segmentation_preds(model,
                                      scans: Tensor,
                                      masks: Tensor,
                                      metrics: dict,
+                                     p1s: Tensor,
+                                     p99s: Tensor,
                                      regions: Optional[list] = None,
-                                     means: Optional[Tensor] = None,
-                                     stds: Optional[Tensor] = None,
-                                     mins_maxs: Optional[Tensor] = None,
                                      head_masks: Optional[Tensor] = None):
     """
         It is an iterator function that computes predictions and scores per single slice.
@@ -185,9 +184,6 @@ def get_per_slice_segmentation_preds(model,
             scans: Tensor of shape (B, C, D, H, W)
             masks: Tensor of shape (B, C, D, H, W)
             metrics: Metrics to compute
-            means: Tensor containing the original means needed to adjust the threshold for the head mask
-            stds: Tensor containing the original stds needed to adjust the threshold for the head mask
-            mins_maxs: Tensor containing the standardize min and max values needed to adjust the threshold for the head mask
     """
 
     with torch.no_grad():
@@ -197,16 +193,12 @@ def get_per_slice_segmentation_preds(model,
     masks = masks.unsqueeze(1)
 
     for i in range(scans.shape[0]):
-        if means is not None and stds is not None:
-            adjusted_threshold = (HEAD_MASK_THRESHOLD - means[i]) / stds[i]
-
-            if mins_maxs is not None:
-                z_min, z_max = mins_maxs[i]
-                adjusted_threshold = (adjusted_threshold - z_min) / (z_max - z_min)
-
-            head_mask = compute_head_mask(scans[i], threshold=adjusted_threshold)
+        if head_masks is None:
+            adjusted_threshold = torch.clip(HEAD_MASK_THRESHOLD, p1s[i], p99s[i])
+            adjusted_threshold = (adjusted_threshold - p1s[i]) / (p99s[i] - p1s[i] + 1e6)
+            head_mask = compute_head_mask(scans[i], adjusted_threshold)
         else:
-            head_mask = compute_head_mask(scans[i])
+            head_mask = head_masks[i]
 
         for slice_idx in range(scans.shape[-3]):
             head_mask_slice = head_mask[:, slice_idx]  # C, H, W

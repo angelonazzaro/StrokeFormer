@@ -1,16 +1,24 @@
 program: train_rpn.py
 project: RPN
 entity: neurone-lab
-name: faster-r-cnn-sweep
+name: truenet-pretrained-rpn-sweep-multiple-sessions
 method: bayes
 metric:
   goal: minimize
   name: val_loss
 parameters:
-  model.lr:
+  model.backbone_lr:
     distribution: log_uniform_values
-    min: 0.00001         # 1e-5
-    max: 0.001           # 1e-3
+    min: 0.00001         # 1e-6
+    max: 0.001           # 1e-4
+  model.roi_head_lr:
+    distribution: log_uniform_values
+    min: 0.00001         # 1e-4
+    max: 0.001           # 1e-2
+  model.rpn_lr:
+    distribution: log_uniform_values
+    min: 0.00001         # 1e-4
+    max: 0.001           # 1e-2
   model.weight_decay:
     distribution: log_uniform_values
     min: 0.00001         # 1e-5
@@ -18,11 +26,11 @@ parameters:
   data.paths:
     value:
       train:
-        scans: "data/ATLAS_2/Processed/2D/Splits/Train/Scans"
-        masks: "data/ATLAS_2/Processed/2D/Splits/Train/Masks"
+        scans: "data/ATLAS_2/Processed/Base/2D/Balanced/MultipleSessions/Splits/Train/Scans"
+        masks: "data/ATLAS_2/Processed/Base/2D/Balanced/MultipleSessions/Splits/Train/Masks"
       val:
-        scans: "data/ATLAS_2/Processed/2D/Splits/Val/Scans"
-        masks: "data/ATLAS_2/Processed/2D/Splits/Val/Masks"
+        scans: "data/ATLAS_2/Processed/Base/2D/Balanced/MultipleSessions/Splits/Val/Scans"
+        masks: "data/ATLAS_2/Processed/Base/2D/Balanced/MultipleSessions/Splits/Val/Masks"
   data.batch_size:
     value: 32
   trainer.max_epochs:

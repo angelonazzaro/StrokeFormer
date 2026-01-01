@@ -6,7 +6,7 @@ from torchvision.ops import boxes as box_ops, box_iou
 from torchmetrics.functional.classification import jaccard_index
 
 
-def sliding_window_inference_3d(region, model, roi_d, roi_h, roi_w, overlap=0.5):
+def sliding_window_inference_3d(region, model, roi_d, roi_h, roi_w, overlap=0.25):
     # apply overlap only on dimensions exceeds their roi dimension
     C, D, H, W = region.shape
 
@@ -197,7 +197,7 @@ def propose_regions(rpn, scan, head_mask, roi_size):
                     ymax = max(ymax, box[3])
 
                 curr_boxes = torch.tensor([xmin, ymin, xmax, ymax], device=rpn.device).unsqueeze(0)  # (1, 4)
-                curr_boxes = expand_boxes(curr_boxes, scan.shape[3:], roi_size[1:])  # noqa
+                curr_boxes = expand_boxes(curr_boxes, scan.shape[2:], roi_size[1:])  # noqa
                 proposals[j]["boxes"] = curr_boxes
         else:
             curr_head_mask = head_mask[:, j]
@@ -217,13 +217,12 @@ def propose_regions(rpn, scan, head_mask, roi_size):
 
     # step 2.2: scroll each group from above and below
     for group_dict in anatomical_groups:
-        group = group_dict["group"]
         group_proposals = group_dict["proposals"]
 
         boxes = collect_boxes(group_proposals)
 
-        # if boxes is None:
-        #     continue  # no proposals at all in this group
+        if boxes is None:
+            continue  # no proposals at all in this group
 
         # find most frequent box via IoU clustering
         clusters = cluster_boxes_iou(boxes, iou_thresh=0.7)

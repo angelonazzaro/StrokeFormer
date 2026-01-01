@@ -151,6 +151,7 @@ class SegmentationDataModule(LightningDataModule):
                  overlap: Optional[float] = 0.5,
                  transforms: Optional[List[Callable]] = None,
                  augment: bool = False,
+                 normalize: bool = True,
                  regions: Optional[str] = None,
                  resize_to: Optional[tuple[int, int]] = None,
                  batch_size: int = 32,
@@ -166,6 +167,7 @@ class SegmentationDataModule(LightningDataModule):
         self.overlap = overlap
         self.transforms = transforms
         self.augment = augment
+        self.normalize = normalize
         self.regions = regions
 
         self.resize_to = resize_to
@@ -189,6 +191,7 @@ class SegmentationDataModule(LightningDataModule):
                                                               ext=self.ext,
                                                               augment=self.augment if split == "train" else False,
                                                               regions=self.regions,
+                                                              normalize=self.normalize,
                                                               overlap=self.overlap,
                                                               subvolume_depth=self.subvolume_depth,
                                                               transforms=transforms))
@@ -222,7 +225,7 @@ class SegmentationDataModule(LightningDataModule):
         )
 
     def custom_collate(self, batch):
-        scans, masks, head_masks, means, regions, stds, mins_maxs = [], [], [], [], [], [], []
+        scans, masks, head_masks, regions, p1s, p99s = [], [], [], [], [], []
         max_D = float("-inf")
 
         for el in batch:
@@ -230,9 +233,8 @@ class SegmentationDataModule(LightningDataModule):
             scans.append(el["scan"])
             head_masks.append(el["head_mask"])
             masks.append(el["mask"])
-            means.append(el["mean"])
-            stds.append(el["std"])
-            mins_maxs.append(el["min_max"])
+            p1s.append(el["p1"])
+            p99s.append(el["p99"])
 
             el_regions = el.get("regions", None)
             if el_regions is not None:
@@ -246,7 +248,9 @@ class SegmentationDataModule(LightningDataModule):
             ph = th - h
             pw = tw - w
 
-            return F.pad(x, (0, pw, 0, ph, 0, pd))
+            if pd > 0 or pw > 0 or ph > 0:
+                return F.pad(x, (0, pw, 0, ph, 0, pd))
+            return x
 
         # Final target shape (C, D, H, W)
         C = scans[0].shape[0]
@@ -256,8 +260,8 @@ class SegmentationDataModule(LightningDataModule):
         scans = torch.stack([pad_to_shape(x, target_shape) for x in scans])  # batched tensors (B, C, D, H, W)
         masks = torch.stack([pad_to_shape(x, target_shape) for x in masks])
         head_masks = torch.stack([pad_to_shape(x, target_shape) for x in head_masks])
-        means, stds = torch.stack(means), torch.stack(stds)  # (B)
-        mins_maxs = torch.tensor(mins_maxs)
+
+        p1s, p99s = torch.stack(p1s), torch.stack(p99s)
 
         if self.resize_to is not None:
             _, masks = resize(scans, masks, *self.resize_to)
@@ -267,9 +271,8 @@ class SegmentationDataModule(LightningDataModule):
             "scans": scans,
             "head_masks": head_masks,
             "masks": masks.squeeze(1),
-            "means": means,
-            "stds": stds,
-            "mins_maxs": mins_maxs
+            "p1s": p1s,
+            "p99s": p99s
         }
 
         if len(regions) > 0:

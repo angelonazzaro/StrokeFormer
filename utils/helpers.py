@@ -12,6 +12,25 @@ from torchvision.transforms.v2.functional import to_pil_image
 from constants import HEAD_MASK_THRESHOLD
 
 
+def robust_normalization(vol, vol_mask, p_low=1, p_high=99):
+    is_tensor = isinstance(vol, torch.Tensor)
+
+    vol_np = vol.detach().cpu().numpy() if is_tensor else vol
+    mask_np = vol_mask.detach().cpu().numpy() if is_tensor else vol_mask
+
+    vals = vol_np[mask_np]
+    p1, p99 = np.percentile(vals, (p_low, p_high))
+
+    vol_clip = np.clip(vol_np, p1, p99)
+    vol_norm = (vol_clip - p1) / (p99 - p1 + 1e-6)
+
+    if is_tensor:
+        vol_norm = torch.from_numpy(vol_norm).to(device=vol.device, dtype=vol.dtype)
+        return vol_norm, float(p1), float(p99)
+    else:
+        return vol_norm, float(p1), float(p99)
+
+
 def to_3channel(img):
     if img.shape[0] == 1:
         return img.repeat(3, 1, 1)
