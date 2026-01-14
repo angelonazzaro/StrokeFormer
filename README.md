@@ -1,8 +1,9 @@
 <div align="center">
-    <!-- <img src="https://github.com/user-attachments/assets/52b8223d-5740-47c4-b699-9497c6c52a9b" alt="StrokeFormer logo" width="300"/> -->
+    <img width="350" height="350" alt="logo" src="https://github.com/user-attachments/assets/d5014ae2-9ebe-4735-aaeb-d57b82ce521d" />
     <h1>StrokeFormer</h1>
     <h3>A lightweight approach for stroke lesion segmentation</h3>
 </div>
+
 
 <p align="center">
  <a href="#"><img src="https://img.shields.io/github/contributors/angelonazzaro/StrokeFormer?style=for-the-badge" alt="Contributors"/></a>
