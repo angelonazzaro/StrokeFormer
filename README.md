@@ -1,5 +1,5 @@
 <div align="center">
-    <img width="350" height="350" alt="logo" src="https://github.com/user-attachments/assets/d5014ae2-9ebe-4735-aaeb-d57b82ce521d" />
+    <img width="275" height="275" alt="logo" src="https://github.com/user-attachments/assets/d5014ae2-9ebe-4735-aaeb-d57b82ce521d" />
     <h1>StrokeFormer</h1>
     <h3>A lightweight approach for stroke lesion segmentation</h3>
 </div>
